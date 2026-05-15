@@ -12,6 +12,7 @@ from dotenv import load_dotenv
 
 from pipeline.db import (
     complete_pipeline_run,
+    get_keyword_categories,
     init_db,
     load_keywords_from_yaml,
     get_active_keywords,
@@ -39,6 +40,7 @@ async def _collect_all(keywords: list[str], since: datetime) -> tuple[list, list
     from pipeline.utils.rate_limiter import get_limiter
 
     sources_cfg = _load_sources_config()
+    keyword_cats = get_keyword_categories()
     all_items = []
     errors = []
 
@@ -76,7 +78,7 @@ async def _collect_all(keywords: list[str], since: datetime) -> tuple[list, list
 
     for name, collector in collectors:
         try:
-            items = await collector.collect(keywords, since)
+            items = await collector.collect(keywords, since, keyword_categories=keyword_cats)
             all_items.extend(items)
         except Exception as e:
             logger.exception("Collector %s failed", name)
@@ -114,15 +116,19 @@ def daily(hours: int):
         from pipeline.processing.keyword_counter import count_keywords_for_items
         count_keywords_for_items(new_ids)
 
-        # Step 5: Score with Claude Haiku
+        # Step 5: Detect trends (z-score acceleration)
+        from pipeline.processing.trend_detector import detect_trends
+        trend_alerts = detect_trends()
+
+        # Step 6: Score with Claude Haiku
         from pipeline.processing.scorer import score_items
         items_scored = score_items(new_ids)
 
-        # Step 6: Generate digest
+        # Step 7: Generate digest
         from pipeline.generators.daily_digest import generate_digest
         digest_data = generate_digest()
 
-        # Step 7: Deliver to Discord
+        # Step 8: Deliver to Discord
         if digest_data:
             from pipeline.delivery.discord_webhook import deliver_digest
             from datetime import date
@@ -151,6 +157,8 @@ def daily(hours: int):
             run_id, status="failed", errors=[str(e)], duration_secs=round(duration, 2)
         )
         logger.exception("Daily pipeline failed")
+        from pipeline.delivery.discord_webhook import deliver_error_alert
+        deliver_error_alert("daily", str(e))
         raise
 
 
@@ -158,19 +166,132 @@ def daily(hours: int):
 @click.option("--days", default=30, help="Number of days to backfill")
 def backfill(days: int):
     """Backfill historical data for trend detection baseline."""
-    click.echo(f"Backfill for {days} days — not yet implemented")
+    start = time.time()
+    run_id = start_pipeline_run("backfill")
+    since = datetime.now() - timedelta(days=days)
+    keywords = get_active_keywords()
+
+    logger.info("Starting backfill: %d days, %d keywords", days, len(keywords))
+
+    try:
+        all_items, errors = asyncio.run(_collect_backfill(keywords, since))
+        new_ids = deduplicate_and_store(all_items)
+
+        from pipeline.processing.keyword_counter import count_keywords_for_items
+        count_keywords_for_items(new_ids, use_item_dates=True)
+
+        duration = time.time() - start
+        complete_pipeline_run(
+            run_id,
+            status="completed",
+            items_collected=len(new_ids),
+            items_scored=0,
+            errors=errors or None,
+            duration_secs=round(duration, 2),
+        )
+        logger.info("Backfill completed: %d items in %.1fs", len(new_ids), duration)
+    except Exception as e:
+        duration = time.time() - start
+        complete_pipeline_run(
+            run_id, status="failed", errors=[str(e)], duration_secs=round(duration, 2)
+        )
+        logger.exception("Backfill failed")
+        raise
+
+
+async def _collect_backfill(keywords: list[str], since: datetime) -> tuple[list, list[str]]:
+    from pipeline.collectors.hackernews import HackerNewsCollector
+    from pipeline.collectors.github import GitHubCollector
+    from pipeline.utils.rate_limiter import get_limiter
+
+    sources_cfg = _load_sources_config()
+    all_items = []
+    errors = []
+
+    collectors = [
+        ("hackernews", HackerNewsCollector(get_limiter("hackernews"))),
+        (
+            "github",
+            GitHubCollector(
+                sources_cfg.get("github_search", {}).get("extra_queries", []),
+                get_limiter("github"),
+            ),
+        ),
+    ]
+
+    for name, collector in collectors:
+        try:
+            items = await collector.collect(keywords, since)
+            all_items.extend(items)
+        except Exception as e:
+            logger.exception("Backfill collector %s failed", name)
+            errors.append(f"{name}: {e}")
+
+    return all_items, errors
 
 
 @cli.command()
 def weekly():
     """Run weekly keyword suggestion pipeline."""
-    click.echo("Weekly pipeline — not yet implemented")
+    from pipeline.generators.keyword_suggestions import suggest_keywords
+    from pipeline.delivery.discord_webhook import deliver_keyword_suggestions
+
+    start = time.time()
+    run_id = start_pipeline_run("weekly")
+
+    try:
+        suggestions = suggest_keywords()
+        if suggestions:
+            deliver_keyword_suggestions(suggestions)
+
+        duration = time.time() - start
+        complete_pipeline_run(
+            run_id,
+            status="completed",
+            items_collected=0,
+            items_scored=0,
+            duration_secs=round(duration, 2),
+        )
+        logger.info("Weekly pipeline completed: %d suggestions in %.1fs", len(suggestions), duration)
+    except Exception as e:
+        duration = time.time() - start
+        complete_pipeline_run(
+            run_id, status="failed", errors=[str(e)], duration_secs=round(duration, 2)
+        )
+        logger.exception("Weekly pipeline failed")
+        raise
 
 
 @cli.command()
-def event():
+@click.option("--target-date", default=None, help="Override target date (YYYY-MM-DD) for testing")
+def event(target_date: str | None):
     """Check for conferences needing pre/post-event briefings."""
-    click.echo("Event pipeline — not yet implemented")
+    from datetime import date as date_type
+    from pipeline.generators.conference_briefing import (
+        get_actionable_conferences,
+        generate_pre_event,
+        generate_post_event,
+    )
+    from pipeline.delivery.discord_webhook import deliver_conference_briefing
+
+    target = date_type.fromisoformat(target_date) if target_date else None
+    actionable = get_actionable_conferences(target)
+
+    if not actionable["pre_event"] and not actionable["post_event"]:
+        logger.info("Event pipeline: no conferences to process today")
+        return
+
+    for conf in actionable["pre_event"]:
+        logger.info("Generating pre-event briefing for %s", conf["name"])
+        data = generate_pre_event(conf)
+        if data:
+            deliver_conference_briefing(data, conf, "pre_event")
+
+    for conf in actionable["post_event"]:
+        logger.info("Generating post-event briefing for %s", conf["name"])
+        data = generate_post_event(conf)
+        if data:
+            deliver_conference_briefing(data, conf, "post_event")
 
 
 if __name__ == "__main__":

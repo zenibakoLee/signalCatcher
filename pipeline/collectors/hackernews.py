@@ -19,7 +19,7 @@ class HackerNewsCollector(BaseCollector):
     def __init__(self, rate_limiter: RateLimiter):
         super().__init__(rate_limiter)
 
-    async def collect(self, keywords: list[str], since: datetime) -> list[RawItem]:
+    async def collect(self, keywords: list[str], since: datetime, keyword_categories: dict[str, str] | None = None) -> list[RawItem]:
         since_ts = int(since.timestamp())
         seen_ids: set[str] = set()
         items: list[RawItem] = []

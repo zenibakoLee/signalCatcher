@@ -12,5 +12,10 @@ class BaseCollector(ABC):
         self.rate_limiter = rate_limiter
 
     @abstractmethod
-    async def collect(self, keywords: list[str], since: datetime) -> list[RawItem]:
+    async def collect(
+        self,
+        keywords: list[str],
+        since: datetime,
+        keyword_categories: dict[str, str] | None = None,
+    ) -> list[RawItem]:
         pass

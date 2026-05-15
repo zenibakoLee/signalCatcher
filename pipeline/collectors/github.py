@@ -21,7 +21,7 @@ class GitHubCollector(BaseCollector):
         super().__init__(rate_limiter)
         self.extra_queries = extra_queries
 
-    async def collect(self, keywords: list[str], since: datetime) -> list[RawItem]:
+    async def collect(self, keywords: list[str], since: datetime, keyword_categories: dict[str, str] | None = None) -> list[RawItem]:
         token = os.environ.get("GITHUB_TOKEN")
         if not token:
             logger.warning("GitHub: GITHUB_TOKEN not set, skipping")
@@ -35,19 +35,18 @@ class GitHubCollector(BaseCollector):
         seen: set[str] = set()
         items: list[RawItem] = []
         since_date = since.strftime("%Y-%m-%d")
-        week_ago = (datetime.now() - timedelta(days=7)).strftime("%Y-%m-%d")
 
         async with httpx.AsyncClient(timeout=30, headers=headers) as client:
             for kw in keywords:
                 await self.rate_limiter.acquire()
                 try:
-                    query = f"{kw} created:>{week_ago} stars:>5"
+                    query = f"{kw} created:>{since_date} stars:>5"
                     kw_items = await self._search(client, query, seen)
                     items.extend(kw_items)
                 except Exception:
                     logger.exception("GitHub: failed keyword '%s'", kw)
 
-            yesterday = (datetime.now() - timedelta(days=1)).strftime("%Y-%m-%d")
+            yesterday = max(since, datetime.now() - timedelta(days=1)).strftime("%Y-%m-%d")
             for extra in self.extra_queries:
                 await self.rate_limiter.acquire()
                 try:

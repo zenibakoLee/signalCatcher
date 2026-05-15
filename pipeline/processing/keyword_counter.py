@@ -11,7 +11,11 @@ from pipeline.db import get_connection, get_active_keywords
 logger = logging.getLogger(__name__)
 
 
-def count_keywords_for_items(item_ids: list[int], target_date: date | None = None) -> None:
+def count_keywords_for_items(
+    item_ids: list[int],
+    target_date: date | None = None,
+    use_item_dates: bool = False,
+) -> None:
     if not item_ids:
         return
 
@@ -26,16 +30,34 @@ def count_keywords_for_items(item_ids: list[int], target_date: date | None = Non
         for kw in keywords
     }
 
-    if target_date is None:
-        target_date = date.today()
-    date_str = target_date.isoformat()
-
     placeholders = ",".join("?" for _ in item_ids)
     rows = conn.execute(
-        f"SELECT id, source, title, content_snippet FROM raw_items WHERE id IN ({placeholders})",
+        f"SELECT id, source, title, content_snippet, date(published_at) as item_date FROM raw_items WHERE id IN ({placeholders})",
         item_ids,
     ).fetchall()
 
+    if use_item_dates:
+        date_groups: dict[str, list] = {}
+        for row in rows:
+            d = row["item_date"]
+            if d not in date_groups:
+                date_groups[d] = []
+            date_groups[d].append(row)
+
+        for date_str, day_rows in sorted(date_groups.items()):
+            _count_rows(conn, patterns, day_rows, date_str)
+            _aggregate_daily(conn, date_str)
+
+        logger.info("Keyword counter: %d items across %d dates", len(rows), len(date_groups))
+    else:
+        if target_date is None:
+            target_date = date.today()
+        date_str = target_date.isoformat()
+        _count_rows(conn, patterns, rows, date_str)
+        _aggregate_daily(conn, date_str)
+
+
+def _count_rows(conn, patterns: dict, rows: list, date_str: str) -> None:
     counts: dict[tuple[str, str], list[int]] = {}
 
     for row in rows:
@@ -53,15 +75,13 @@ def count_keywords_for_items(item_ids: list[int], target_date: date | None = Non
             """INSERT INTO keyword_mentions (keyword, source, mention_date, mention_count, sample_item_ids)
                VALUES (?, ?, ?, ?, ?)
                ON CONFLICT(keyword, source, mention_date)
-               DO UPDATE SET mention_count = mention_count + excluded.mention_count,
+               DO UPDATE SET mention_count = excluded.mention_count,
                              sample_item_ids = excluded.sample_item_ids""",
             (kw, source, date_str, len(matched_ids), sample),
         )
 
     conn.commit()
-    logger.info("Keyword counter: %d keyword-source pairs updated", len(counts))
-
-    _aggregate_daily(conn, date_str)
+    logger.info("Keyword counter: %d keyword-source pairs for %s", len(counts), date_str)
 
 
 def _aggregate_daily(conn: sqlite3.Connection, date_str: str) -> None:

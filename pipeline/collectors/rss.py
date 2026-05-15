@@ -18,7 +18,7 @@ class RSSCollector(BaseCollector):
         super().__init__(rate_limiter)
         self.feeds = feeds
 
-    async def collect(self, keywords: list[str], since: datetime) -> list[RawItem]:
+    async def collect(self, keywords: list[str], since: datetime, keyword_categories: dict[str, str] | None = None) -> list[RawItem]:
         since_struct = since.timetuple()
         items: list[RawItem] = []
 

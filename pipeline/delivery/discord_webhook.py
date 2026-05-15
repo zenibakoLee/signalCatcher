@@ -111,3 +111,151 @@ def _send_embeds(webhook_url: str, embeds: list[dict], date_str: str) -> bool:
     except Exception:
         logger.exception("Discord: failed to deliver digest")
         return False
+
+
+DEEP_BLUE = 0x1E3A5F
+
+
+def deliver_conference_briefing(data: dict, conf: dict, briefing_type: str) -> bool:
+    webhook_url = os.environ.get("DISCORD_WEBHOOK_URL")
+    if not webhook_url:
+        logger.warning("Discord: DISCORD_WEBHOOK_URL not set, skipping delivery")
+        return False
+
+    is_pre = briefing_type == "pre_event"
+    title_prefix = "📋 사전 브리핑" if is_pre else "📊 사후 브리핑"
+    title = f"{title_prefix}: {conf['name']}"
+    headline = data.get("headline", title)
+
+    description = data.get("summary", "")
+    if len(description) > MAX_DESCRIPTION:
+        description = description[: MAX_DESCRIPTION - 3] + "..."
+
+    fields = []
+
+    if is_pre:
+        items_text = ""
+        for item in data.get("expected_items", [])[:8]:
+            rel = item.get("investment_relevance", "?")
+            icon = "🔴" if rel == "높음" else "🟡" if rel == "중간" else "🟢"
+            items_text += f"{icon} **{item['item']}** ({rel})\n"
+        if items_text:
+            fields.append({"name": "예상 발표 항목", "value": items_text[:MAX_FIELD_VALUE], "inline": False})
+        if data.get("watch_points"):
+            fields.append({"name": "투자자 주목 포인트", "value": data["watch_points"][:MAX_FIELD_VALUE], "inline": False})
+    else:
+        announcements = ""
+        for a in data.get("key_announcements", [])[:5]:
+            announcements += f"• **{a['item']}** — {a.get('significance', '')}\n"
+        if announcements:
+            fields.append({"name": "핵심 발표", "value": announcements[:MAX_FIELD_VALUE], "inline": False})
+
+        silent = ""
+        for s in data.get("silent_signals", [])[:5]:
+            silent += f"🔇 **{s['expected_item']}** — {s.get('interpretation', '')}\n"
+        if silent:
+            fields.append({"name": "Silent Signals", "value": silent[:MAX_FIELD_VALUE], "inline": False})
+
+        surprises = ""
+        for s in data.get("surprises", [])[:3]:
+            surprises += f"⚡ **{s['item']}** — {s.get('significance', '')}\n"
+        if surprises:
+            fields.append({"name": "서프라이즈", "value": surprises[:MAX_FIELD_VALUE], "inline": False})
+
+        if data.get("investment_takeaway"):
+            fields.append({"name": "투자 시사점", "value": data["investment_takeaway"][:MAX_FIELD_VALUE], "inline": False})
+
+    embed = {
+        "title": headline[:256],
+        "description": description,
+        "color": DEEP_BLUE,
+        "fields": fields,
+        "footer": {"text": f"시그널 캐처 | {conf['start_date']} ~ {conf['end_date']}"},
+    }
+
+    try:
+        with httpx.Client(timeout=30) as client:
+            resp = client.post(
+                webhook_url,
+                json={"embeds": [embed]},
+                headers={"Content-Type": "application/json"},
+            )
+            resp.raise_for_status()
+
+        conn = get_connection()
+        conn.execute(
+            "UPDATE conference_briefings SET delivered = 1 WHERE conference_name = ? AND conference_start = ? AND briefing_type = ?",
+            (conf["name"], conf["start_date"], briefing_type),
+        )
+        conn.commit()
+
+        logger.info("Discord: conference %s briefing delivered for %s", briefing_type, conf["name"])
+        return True
+    except Exception:
+        logger.exception("Discord: failed to deliver conference briefing")
+        return False
+
+
+LAVENDER = 0x7B68AE
+
+
+def deliver_keyword_suggestions(suggestions: list[dict]) -> bool:
+    webhook_url = os.environ.get("DISCORD_WEBHOOK_URL")
+    if not webhook_url:
+        logger.warning("Discord: DISCORD_WEBHOOK_URL not set, skipping delivery")
+        return False
+
+    lines = []
+    for s in suggestions[:10]:
+        cat = s.get("category", "?")
+        lines.append(f"**{s['keyword']}** (`{cat}`)\n{s.get('reason', '')}")
+
+    description = "\n\n".join(lines)
+    if len(description) > MAX_DESCRIPTION:
+        description = description[: MAX_DESCRIPTION - 3] + "..."
+
+    embed = {
+        "title": "🔍 주간 키워드 제안",
+        "description": description,
+        "color": LAVENDER,
+        "footer": {"text": "시그널 캐처 | 대시보드 설정에서 승인/거부"},
+    }
+
+    try:
+        with httpx.Client(timeout=30) as client:
+            resp = client.post(
+                webhook_url,
+                json={"embeds": [embed]},
+                headers={"Content-Type": "application/json"},
+            )
+            resp.raise_for_status()
+        logger.info("Discord: keyword suggestions delivered (%d items)", len(suggestions))
+        return True
+    except Exception:
+        logger.exception("Discord: failed to deliver keyword suggestions")
+        return False
+
+
+def deliver_error_alert(pipeline_type: str, error_msg: str) -> bool:
+    webhook_url = os.environ.get("DISCORD_WEBHOOK_URL")
+    if not webhook_url:
+        return False
+
+    embed = {
+        "title": f"⚠️ 파이프라인 오류: {pipeline_type}",
+        "description": f"```\n{error_msg[:3000]}\n```",
+        "color": 0xFF0000,
+        "footer": {"text": "시그널 캐처 | 로그 확인: data/logs/pipeline.log"},
+    }
+
+    try:
+        with httpx.Client(timeout=30) as client:
+            resp = client.post(
+                webhook_url,
+                json={"embeds": [embed]},
+                headers={"Content-Type": "application/json"},
+            )
+            resp.raise_for_status()
+        return True
+    except Exception:
+        return False

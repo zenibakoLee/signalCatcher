@@ -127,6 +127,15 @@ def get_active_keywords(conn: sqlite3.Connection | None = None) -> list[str]:
     return [r["keyword"] for r in rows]
 
 
+def get_keyword_categories(conn: sqlite3.Connection | None = None) -> dict[str, str]:
+    if conn is None:
+        conn = get_connection()
+    rows = conn.execute(
+        "SELECT keyword, category FROM keywords WHERE status = 'active'"
+    ).fetchall()
+    return {r["keyword"]: r["category"] for r in rows}
+
+
 def load_keywords_from_yaml(yaml_path: Path) -> None:
     import yaml
 

@@ -22,7 +22,7 @@ class YouTubeCollector(BaseCollector):
         self.channels = channels
         self._quota_used = 0
 
-    async def collect(self, keywords: list[str], since: datetime) -> list[RawItem]:
+    async def collect(self, keywords: list[str], since: datetime, keyword_categories: dict[str, str] | None = None) -> list[RawItem]:
         api_key = os.environ.get("YOUTUBE_API_KEY")
         if not api_key:
             logger.warning("YouTube: YOUTUBE_API_KEY not set, skipping")
