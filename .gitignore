@@ -1,5 +1,11 @@
+# Data
 data/
+
+# Environment
 .env
+.env.local
+
+# Python
 .venv/
 __pycache__/
 *.pyc
@@ -7,6 +13,21 @@ __pycache__/
 *.egg-info/
 dist/
 build/
+
+# Dashboard (Next.js)
 dashboard/node_modules/
 dashboard/.next/
+dashboard/next-env.d.ts
+
+# OS
 .DS_Store
+Thumbs.db
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Logs (data/ 외부 생성 시)
+*.log
