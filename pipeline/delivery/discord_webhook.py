@@ -28,13 +28,13 @@ def deliver_digest(digest_data: dict, date_str: str) -> bool:
 
 
 def _build_embeds(data: dict, date_str: str) -> list[dict]:
-    headline = data.get("headline", f"Signal Digest — {date_str}")
+    headline = data.get("headline", f"시그널 다이제스트 — {date_str}")
     summary = data.get("summary", "")
     takeaway = data.get("one_line_takeaway", "")
 
     description = summary
     if takeaway:
-        description += f"\n\n**Takeaway:** {takeaway}"
+        description += f"\n\n**핵심 인사이트:** {takeaway}"
     if len(description) > MAX_DESCRIPTION:
         description = description[: MAX_DESCRIPTION - 3] + "..."
 
@@ -60,7 +60,7 @@ def _build_embeds(data: dict, date_str: str) -> list[dict]:
         "description": description,
         "color": SAGE_GREEN,
         "fields": fields,
-        "footer": {"text": f"Signal Catcher | {date_str}"},
+        "footer": {"text": f"시그널 캐처 | {date_str}"},
     }
 
     embeds = [main_embed]
@@ -68,7 +68,7 @@ def _build_embeds(data: dict, date_str: str) -> list[dict]:
     trend_section = data.get("trend_section", "")
     if trend_section:
         trend_embed = {
-            "title": "📈 Trend Alerts",
+            "title": "📈 트렌드 알림",
             "description": trend_section[:MAX_DESCRIPTION],
             "color": EMBER_ORANGE,
         }

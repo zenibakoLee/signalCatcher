@@ -28,7 +28,7 @@ class RateLimiter:
 
 LIMITERS: dict[str, RateLimiter] = {
     "hackernews": RateLimiter(2.0),
-    "arxiv": RateLimiter(0.2),
+    "arxiv": RateLimiter(0.1),
     "github": RateLimiter(0.5),
     "youtube": RateLimiter(1.0),
     "rss": RateLimiter(2.0),

@@ -70,26 +70,27 @@ def generate_digest(target_date: date | None = None) -> dict | None:
             )
         trends_block = "\n\nTREND ALERTS:\n" + "\n".join(trend_lines)
 
-    prompt = f"""You are writing a daily investment signal digest for {date_str}.
+    prompt = f"""당신은 {date_str}의 일일 투자 시그널 다이제스트를 작성하는 분석가입니다.
+모든 출력은 반드시 한국어로 작성하세요.
 
-Below are today's top-scored items from tech sources (HN, arXiv, GitHub, RSS, YouTube),
-already scored by relevance to investment opportunities.{trends_block}
+아래는 오늘 기술 소스(HN, arXiv, GitHub, RSS, YouTube)에서 수집된 상위 항목입니다.
+투자 기회 관련도에 따라 이미 점수가 매겨져 있습니다.{trends_block}
 
-ITEMS:
+항목:
 {chr(10).join(items_block)}
 
-Generate a digest in this exact JSON format:
+아래 JSON 형식으로 다이제스트를 생성하세요:
 {{
-  "headline": "A compelling one-line headline summarizing today's most important signal (max 100 chars)",
-  "summary": "2-3 sentence executive summary of the day's key themes and signals",
+  "headline": "오늘의 가장 중요한 시그널을 요약하는 한 줄 헤드라인 (최대 80자, 한국어)",
+  "summary": "오늘의 핵심 테마와 시그널을 요약하는 2-3문장 (한국어)",
   "top_items_commentary": [
-    {{"title": "item title", "score": 85, "source": "HN", "url": "...", "commentary": "One sentence on why this matters for investors"}}
+    {{"title": "항목 제목 (원문 유지)", "score": 85, "source": "HN", "url": "...", "commentary": "투자자에게 왜 중요한지 한 문장 설명 (한국어)"}}
   ],
-  "trend_section": "If there are trend alerts, 2-3 sentences interpreting them. Otherwise empty string.",
-  "one_line_takeaway": "The single most actionable insight from today"
+  "trend_section": "트렌드 알림이 있으면 2-3문장으로 해석 (한국어). 없으면 빈 문자열.",
+  "one_line_takeaway": "오늘의 가장 실행 가능한 인사이트 한 줄 (한국어)"
 }}
 
-Return ONLY valid JSON."""
+유효한 JSON만 반환하세요."""
 
     try:
         client = anthropic.Anthropic()
@@ -103,11 +104,11 @@ Return ONLY valid JSON."""
     except Exception:
         logger.exception("Digest generation failed, creating minimal digest")
         digest_data = {
-            "headline": f"Signal Digest — {date_str}",
-            "summary": f"Collected {len(top_items)} items. LLM digest generation failed.",
+            "headline": f"시그널 다이제스트 — {date_str}",
+            "summary": f"{len(top_items)}개 항목 수집 완료. LLM 다이제스트 생성 실패.",
             "top_items_commentary": [],
             "trend_section": "",
-            "one_line_takeaway": "Review items manually.",
+            "one_line_takeaway": "항목을 수동으로 검토하세요.",
         }
 
     top_item_ids = [item["raw_item_id"] for item in top_items]
@@ -151,10 +152,10 @@ def _format_markdown(data: dict) -> str:
         parts.append(f"- **[{score}|{source}]** {link} — {commentary}")
 
     if data.get("trend_section"):
-        parts.extend(["", "## Trend Alerts", data["trend_section"]])
+        parts.extend(["", "## 트렌드 알림", data["trend_section"]])
 
     if data.get("one_line_takeaway"):
-        parts.extend(["", f"**Takeaway:** {data['one_line_takeaway']}"])
+        parts.extend(["", f"**핵심 인사이트:** {data['one_line_takeaway']}"])
 
     return "\n".join(parts)
 

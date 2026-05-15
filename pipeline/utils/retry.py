@@ -27,7 +27,10 @@ async def with_retry(
                 raise
             if attempt == max_attempts:
                 raise
-            delay = base_delay * (2 ** (attempt - 1)) * (1 + random.random() * 0.25)
+            if e.response.status_code == 429:
+                delay = 15.0 * attempt * (1 + random.random() * 0.25)
+            else:
+                delay = base_delay * (2 ** (attempt - 1)) * (1 + random.random() * 0.25)
             logger.warning("Attempt %d failed (%s), retrying in %.1fs", attempt, e, delay)
             await asyncio.sleep(delay)
         except (httpx.ConnectError, httpx.ReadTimeout, httpx.WriteTimeout) as e:

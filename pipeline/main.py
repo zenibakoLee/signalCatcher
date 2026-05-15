@@ -30,9 +30,12 @@ def _load_sources_config() -> dict:
         return yaml.safe_load(f)
 
 
-async def _collect_all(keywords: list[str], since: datetime) -> list:
+async def _collect_all(keywords: list[str], since: datetime) -> tuple[list, list[str]]:
     from pipeline.collectors.hackernews import HackerNewsCollector
     from pipeline.collectors.rss import RSSCollector
+    from pipeline.collectors.arxiv import ArxivCollector
+    from pipeline.collectors.github import GitHubCollector
+    from pipeline.collectors.youtube import YouTubeCollector
     from pipeline.utils.rate_limiter import get_limiter
 
     sources_cfg = _load_sources_config()
@@ -46,6 +49,27 @@ async def _collect_all(keywords: list[str], since: datetime) -> list:
             RSSCollector(
                 sources_cfg.get("rss_feeds", []),
                 get_limiter("rss"),
+            ),
+        ),
+        (
+            "arxiv",
+            ArxivCollector(
+                sources_cfg.get("arxiv_categories", ["cs.AI", "cs.LG"]),
+                get_limiter("arxiv"),
+            ),
+        ),
+        (
+            "github",
+            GitHubCollector(
+                sources_cfg.get("github_search", {}).get("extra_queries", []),
+                get_limiter("github"),
+            ),
+        ),
+        (
+            "youtube",
+            YouTubeCollector(
+                sources_cfg.get("youtube_channels", []),
+                get_limiter("youtube"),
             ),
         ),
     ]
