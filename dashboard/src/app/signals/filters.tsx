@@ -1,8 +1,5 @@
 "use client";
 
-import { useRouter, useSearchParams } from "next/navigation";
-import { useCallback } from "react";
-
 export function SignalFilters({
   sources,
   categories,
@@ -12,27 +9,12 @@ export function SignalFilters({
   categories: string[];
   current: { source?: string; category?: string; minScore?: string };
 }) {
-  const router = useRouter();
-  const searchParams = useSearchParams();
-
-  const update = useCallback(
-    (key: string, value: string) => {
-      const params = new URLSearchParams(searchParams.toString());
-      if (value) {
-        params.set(key, value);
-      } else {
-        params.delete(key);
-      }
-      router.push(`/signals?${params.toString()}`);
-    },
-    [router, searchParams]
-  );
-
   return (
-    <div className="flex flex-wrap gap-3">
+    <form action="/signals" method="GET" className="flex flex-wrap gap-3">
       <select
-        value={current.source || ""}
-        onChange={(e) => update("source", e.target.value)}
+        name="source"
+        defaultValue={current.source || ""}
+        onChange={(e) => e.target.form?.submit()}
         className="text-sm border border-light-gray rounded-full px-3 py-1.5 bg-white text-charcoal"
       >
         <option value="">모든 소스</option>
@@ -42,8 +24,9 @@ export function SignalFilters({
       </select>
 
       <select
-        value={current.category || ""}
-        onChange={(e) => update("category", e.target.value)}
+        name="category"
+        defaultValue={current.category || ""}
+        onChange={(e) => e.target.form?.submit()}
         className="text-sm border border-light-gray rounded-full px-3 py-1.5 bg-white text-charcoal"
       >
         <option value="">모든 카테고리</option>
@@ -53,8 +36,9 @@ export function SignalFilters({
       </select>
 
       <select
-        value={current.minScore || ""}
-        onChange={(e) => update("minScore", e.target.value)}
+        name="minScore"
+        defaultValue={current.minScore || ""}
+        onChange={(e) => e.target.form?.submit()}
         className="text-sm border border-light-gray rounded-full px-3 py-1.5 bg-white text-charcoal"
       >
         <option value="">최소 점수 없음</option>
@@ -62,6 +46,10 @@ export function SignalFilters({
         <option value="70">70+</option>
         <option value="85">85+</option>
       </select>
-    </div>
+
+      <noscript>
+        <button type="submit" className="text-sm px-3 py-1.5 rounded-full bg-sage text-white">적용</button>
+      </noscript>
+    </form>
   );
 }

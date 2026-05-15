@@ -47,12 +47,17 @@ export default async function Home({
   ).get(targetDate) as Digest;
 
   const topItems = db.prepare(`
-    SELECT s.score, s.score_reasoning, s.category, s.title_ko,
-           r.title, r.url, r.source, r.content_snippet
-    FROM scored_items s
-    JOIN raw_items r ON s.raw_item_id = r.id
-    WHERE date(r.collected_at) = ?
-    ORDER BY s.score DESC LIMIT 10
+    WITH ranked AS (
+      SELECT s.score, s.score_reasoning, s.category, s.title_ko,
+             r.title, r.url, r.source, r.content_snippet,
+             ROW_NUMBER() OVER (PARTITION BY r.source ORDER BY s.score DESC) as rn
+      FROM scored_items s
+      JOIN raw_items r ON s.raw_item_id = r.id
+      WHERE date(r.collected_at) = ?
+    )
+    SELECT score, score_reasoning, category, title_ko, title, url, source, content_snippet
+    FROM ranked WHERE rn <= 2
+    ORDER BY score DESC LIMIT 10
   `).all(targetDate) as ScoredItem[];
 
   const alerts = db.prepare(
