@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import logging
 import xml.etree.ElementTree as ET
-from datetime import datetime
+from datetime import datetime, timedelta
 from urllib.parse import quote
 
 import httpx
@@ -40,12 +40,13 @@ class ArxivCollector(BaseCollector):
 
         seen_ids: set[str] = set()
         items: list[RawItem] = []
+        effective_since = since - timedelta(days=6)
 
         async with httpx.AsyncClient(timeout=60) as client:
             for kw in keywords:
                 await self.rate_limiter.acquire()
                 try:
-                    kw_items = await self._search_keyword(client, kw, since, seen_ids)
+                    kw_items = await self._search_keyword(client, kw, effective_since, seen_ids)
                     items.extend(kw_items)
                 except Exception:
                     logger.exception("arXiv: failed to search keyword '%s'", kw)

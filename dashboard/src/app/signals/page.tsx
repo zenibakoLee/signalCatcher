@@ -39,7 +39,7 @@ export default async function SignalsPage({ searchParams }: { searchParams: Prom
   }
 
   const items = db.prepare(`
-    SELECT s.score, s.score_reasoning, s.category,
+    SELECT s.score, s.score_reasoning, s.category, s.title_ko,
            r.id, r.title, r.url, r.source, r.content_snippet, r.published_at, r.metadata
     FROM scored_items s
     JOIN raw_items r ON s.raw_item_id = r.id
@@ -86,10 +86,13 @@ export default async function SignalsPage({ searchParams }: { searchParams: Prom
             {item.url ? (
               <a href={item.url} target="_blank" rel="noopener noreferrer"
                  className="font-medium text-sm hover:text-sage transition-colors line-clamp-2 block mb-1">
-                {item.title}
+                {item.title_ko || item.title}
               </a>
             ) : (
-              <p className="font-medium text-sm line-clamp-2 mb-1">{item.title}</p>
+              <p className="font-medium text-sm line-clamp-2 mb-1">{item.title_ko || item.title}</p>
+            )}
+            {item.title_ko && (
+              <p className="text-xs text-warm-gray line-clamp-1 mb-1">{item.title}</p>
             )}
             {item.score_reasoning && (
               <p className="text-xs text-warm-gray line-clamp-2">{item.score_reasoning}</p>

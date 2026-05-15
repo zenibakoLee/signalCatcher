@@ -6,7 +6,7 @@
 signalCatcher/
 ├── config/              # YAML 설정 (keywords, sources, conferences, scoring_prompt)
 ├── pipeline/            # Python 백엔드
-│   ├── main.py          # Click CLI: daily|backfill|weekly|event
+│   ├── main.py          # Click CLI: daily|backfill|weekly|event|score-all|translate-titles
 │   ├── db.py            # SQLite 연결, 스키마, 헬퍼
 │   ├── models.py        # Pydantic: RawItem, ScoredItem, TrendAlert
 │   ├── collectors/      # 소스별 수집기 (BaseCollector ABC)
@@ -17,9 +17,10 @@ signalCatcher/
 ├── dashboard/           # Next.js 16 + Tailwind (read-only SQLite)
 │   └── src/
 │       ├── app/         # 5개 페이지 + 5개 API route
-│       ├── components/  # nav (pill 네비게이션)
+│       ├── components/  # nav, date-picker, auto-refresh, network graph
 │       └── lib/         # db.ts (better-sqlite3), types.ts
-├── launchd/             # macOS 스케줄 (3개 plist + install.sh)
+├── launchd/             # macOS 서비스 (5개 plist + install.sh)
+├── scripts/             # start-dashboard.sh, start-tunnel.sh
 └── data/                # gitignored: signalcatcher.db, logs/
 ```
 
@@ -29,10 +30,11 @@ signalCatcher/
 CLI(click) → collect_all(asyncio, 5 collectors 순차)
            → deduplicate_and_store(INSERT OR IGNORE)
            → count_keywords_for_items(regex word-boundary)
-           → detect_trends(z-score)
-           → score_items(Claude Haiku, 배치 20)
+           → detect_trends(z-score + 장기 가속)
+           → score_items(Claude Haiku, 배치 20, title_ko 포함)
            → generate_digest(Claude Haiku)
            → deliver_digest(Discord webhook)
+           → deliver_acceleration_alerts(장기 가속 알림)
 ```
 
 ## 핵심 패턴
@@ -52,9 +54,12 @@ CLI(click) → collect_all(asyncio, 5 collectors 순차)
 ## 대시보드
 
 - Server Components (기본) — DB 직접 조회, 클라이언트 번들 최소화
-- Client Components — 필터(`useSearchParams`), 차트(SVG 직접 렌더)
+- Client Components — 필터(`useSearchParams`), 캘린더 날짜 선택, 네트워크 그래프(SVG 직접 렌더), 자동 새로고침
 - `better-sqlite3` read-only 연결, `../data/signalcatcher.db` 참조
 - Next.js 16: `params`, `searchParams`는 `Promise<{}>` — 반드시 `await`
+- 자동 새로고침: DB 파일 mtime 폴링 (3초) → `router.refresh()`로 Server Components 재실행
+- 한국어 제목 우선 표시 (`title_ko || title`), 영어 원문은 보조 텍스트
+- Cloudflare Quick Tunnel로 외부 접속 (URL 변경 시 Discord 자동 전송)
 
 ## 디자인 토큰
 

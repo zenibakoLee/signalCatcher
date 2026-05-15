@@ -1,6 +1,7 @@
 export interface ScoredItem {
   id: number;
   title: string;
+  title_ko: string | null;
   url: string | null;
   source: string;
   score: number;
@@ -44,6 +45,7 @@ export interface ConferenceBriefing {
   content_md: string;
   expected_items: string | null;
   silent_signals: string | null;
+  source_item_ids: string | null;
   generated_at: string;
 }
 

@@ -35,9 +35,10 @@ youtube_channels:
 
 github_search:
   extra_queries:
-    - "topic:llm stars:>50 pushed:>{yesterday}"
-    - "topic:ai-agents stars:>20 pushed:>{yesterday}"
-    - "topic:machine-learning stars:>100 pushed:>{yesterday}"
+    - "topic:llm stars:>100 pushed:>{yesterday}"
+    - "topic:ai-agents stars:>50 pushed:>{yesterday}"
+    - "topic:machine-learning stars:>500 pushed:>{yesterday}"
+    - "topic:transformer stars:>100 pushed:>{yesterday}"
 
 arxiv_categories:
   - "cs.AI"

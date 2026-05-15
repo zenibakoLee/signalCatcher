@@ -3,12 +3,19 @@ import type { ConferenceBriefing } from "@/lib/types";
 
 export const dynamic = "force-dynamic";
 
+interface RelatedItem {
+  title: string;
+  url: string | null;
+  source: string;
+  score: number | null;
+}
+
 export default function EventsPage() {
   const db = getDb();
 
   const briefings = db.prepare(`
     SELECT id, conference_name, conference_start, conference_end,
-           briefing_type, content_md, expected_items, silent_signals, generated_at
+           briefing_type, content_md, expected_items, silent_signals, source_item_ids, generated_at
     FROM conference_briefings
     ORDER BY conference_start DESC, briefing_type DESC
   `).all() as ConferenceBriefing[];
@@ -45,9 +52,42 @@ export default function EventsPage() {
             </div>
 
             <div className="divide-y divide-light-gray">
-              {items.map((b) => (
-                <BriefingCard key={b.id} briefing={b} />
-              ))}
+              {items.map((b) => {
+                let relatedItems: RelatedItem[] = [];
+                if (b.briefing_type === "post_event") {
+                  try {
+                    const ids: number[] = b.source_item_ids
+                      ? JSON.parse(b.source_item_ids as unknown as string)
+                      : [];
+                    if (ids.length > 0) {
+                      relatedItems = db.prepare(`
+                        SELECT r.title, r.url, r.source, s.score
+                        FROM raw_items r
+                        LEFT JOIN scored_items s ON s.raw_item_id = r.id
+                        WHERE r.id IN (${ids.map(() => "?").join(",")})
+                        ORDER BY COALESCE(s.score, 0) DESC
+                        LIMIT 10
+                      `).all(...ids) as RelatedItem[];
+                    }
+                  } catch {}
+                }
+                if (relatedItems.length === 0) {
+                  try {
+                    relatedItems = db.prepare(`
+                      SELECT r.title, r.url, r.source, s.score
+                      FROM raw_items r
+                      LEFT JOIN scored_items s ON s.raw_item_id = r.id
+                      WHERE r.published_at >= ? AND r.published_at <= date(?, '+1 day')
+                        AND (r.title LIKE '%' || ? || '%')
+                      ORDER BY COALESCE(s.score, 0) DESC
+                      LIMIT 8
+                    `).all(b.conference_start, b.conference_end, b.conference_name.split(" ")[0]) as RelatedItem[];
+                  } catch {}
+                }
+                return (
+                  <BriefingCard key={b.id} briefing={b} relatedItems={relatedItems} />
+                );
+              })}
             </div>
           </section>
         );
@@ -56,7 +96,7 @@ export default function EventsPage() {
   );
 }
 
-function BriefingCard({ briefing }: { briefing: ConferenceBriefing }) {
+function BriefingCard({ briefing, relatedItems = [] }: { briefing: ConferenceBriefing; relatedItems?: RelatedItem[] }) {
   const isPre = briefing.briefing_type === "pre_event";
   const label = isPre ? "📋 사전 브리핑" : "📊 사후 브리핑";
 
@@ -109,6 +149,32 @@ function BriefingCard({ briefing }: { briefing: ConferenceBriefing }) {
                 <span className="font-medium">{s.expected_item}</span>
                 {s.interpretation && (
                   <span className="text-warm-gray"> — {s.interpretation}</span>
+                )}
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {relatedItems.length > 0 && (
+        <div>
+          <h4 className="text-xs font-bold text-warm-gray mb-1 uppercase tracking-wide">🔗 관련 수집 콘텐츠</h4>
+          <div className="space-y-1.5">
+            {relatedItems.map((item, i) => (
+              <div key={i} className="text-sm flex items-start gap-2">
+                <span className="text-xs px-1.5 py-0.5 rounded bg-cream-dark text-warm-gray shrink-0 mt-0.5">
+                  {item.source === "hackernews" ? "HN" : item.source === "github" ? "GH" : item.source}
+                </span>
+                {item.url ? (
+                  <a href={item.url} target="_blank" rel="noopener noreferrer"
+                     className="text-deep-blue hover:underline line-clamp-1">
+                    {item.title}
+                  </a>
+                ) : (
+                  <span className="line-clamp-1">{item.title}</span>
+                )}
+                {item.score && (
+                  <span className="text-xs text-sage font-mono shrink-0">{item.score}</span>
                 )}
               </div>
             ))}

@@ -31,8 +31,13 @@ conferences.yaml 기반 자동 트리거:
 - **종료 1일 전**: Claude Sonnet으로 예상 발표 목록 생성 (pre_event)
 - **종료 1일 후**: 수집 데이터 대비 silent_signals 분석 (post_event)
 
-### 대시보드 (로컬 전용)
-Next.js 16, read-only SQLite. 5개 페이지: 다이제스트, 시그널탐색, 트렌드차트, 컨퍼런스브리핑, 설정.
+### 대시보드 (Cloudflare Tunnel 외부 접속)
+Next.js 16, read-only SQLite, DB 변경 자동 새로고침. 5개 페이지:
+- **다이제스트**: 캘린더 날짜 선택, 한글 제목 + 영어 원문 표시
+- **시그널 탐색**: 소스·카테고리·최소점수 필터
+- **트렌드 차트**: 멀티타임프레임(7/30/90일/전체), 장기 가속 섹션, 키워드 동시출현 네트워크 그래프
+- **컨퍼런스 브리핑**: 관련 수집 콘텐츠 하이퍼링크
+- **설정**: 키워드 관리
 
 ## 데이터 소스
 
@@ -49,4 +54,4 @@ Next.js 16, read-only SQLite. 5개 페이지: 다이제스트, 시그널탐색, 
 - **언어**: 모든 사용자 대면 출력(Discord, 대시보드, 스코어링)은 한국어
 - **멱등성**: 같은 날 2회 실행해도 중복 없음 (UNIQUE 제약 + ON CONFLICT)
 - **격리**: 수집기별 독립 실패 (HN 실패해도 나머지 진행)
-- **인프라**: 로컬 Mac, SQLite WAL, launchd. 클라우드/CI 없음
+- **인프라**: 로컬 Mac, SQLite WAL, launchd(5개 서비스), Cloudflare Quick Tunnel. 클라우드/CI 없음

@@ -36,7 +36,18 @@ def init_db() -> None:
     DB_PATH.parent.mkdir(parents=True, exist_ok=True)
     conn = get_connection()
     conn.executescript(_SCHEMA)
+    _migrate_add_title_ko(conn)
     conn.commit()
+
+
+def _migrate_add_title_ko(conn: sqlite3.Connection) -> None:
+    """Add title_ko column to scored_items if it doesn't exist yet."""
+    cols = {
+        row[1]
+        for row in conn.execute("PRAGMA table_info(scored_items)").fetchall()
+    }
+    if "title_ko" not in cols:
+        conn.execute("ALTER TABLE scored_items ADD COLUMN title_ko TEXT")
 
 
 def insert_raw_item(item: RawItem) -> int | None:
@@ -176,6 +187,7 @@ CREATE TABLE IF NOT EXISTS scored_items (
     score           INTEGER NOT NULL CHECK(score BETWEEN 0 AND 100),
     score_reasoning TEXT,
     category        TEXT,
+    title_ko        TEXT,
     scored_at       TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%S','now')),
     model_used      TEXT NOT NULL
 );
@@ -254,6 +266,18 @@ CREATE TABLE IF NOT EXISTS keywords (
     added_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%S','now'))
 );
 CREATE INDEX IF NOT EXISTS idx_keywords_status ON keywords(status);
+
+CREATE TABLE IF NOT EXISTS keyword_cooccurrences (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    keyword_a       TEXT NOT NULL,
+    keyword_b       TEXT NOT NULL,
+    mention_date    TEXT NOT NULL,
+    co_count        INTEGER NOT NULL DEFAULT 0,
+    sample_item_ids TEXT,
+    UNIQUE(keyword_a, keyword_b, mention_date)
+);
+CREATE INDEX IF NOT EXISTS idx_cooccur_date ON keyword_cooccurrences(mention_date);
+CREATE INDEX IF NOT EXISTS idx_cooccur_pair ON keyword_cooccurrences(keyword_a, keyword_b);
 
 CREATE TABLE IF NOT EXISTS pipeline_runs (
     id              INTEGER PRIMARY KEY AUTOINCREMENT,

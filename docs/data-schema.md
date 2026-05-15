@@ -9,6 +9,7 @@ raw_items ──1:1──> scored_items     (raw_item_id FK)
 raw_items <──N:M── keyword_mentions (sample_item_ids JSON)
 keyword_mentions ──agg──> keyword_daily_aggregates
 keyword_daily_aggregates ──z-score──> trend_alerts
+keyword_mentions ──pair count──> keyword_cooccurrences
 scored_items + trend_alerts ──LLM──> digests
 conferences.yaml ──LLM──> conference_briefings
 ```
@@ -25,6 +26,7 @@ conferences.yaml ──LLM──> conference_briefings
 ```sql
 raw_item_id UNIQUE FK  -- 재스코어링 시 raw_items 보존
 -- score: 0-100, category: breakthrough|trend|product|research|infrastructure|policy
+-- title_ko: 한국어 번역 제목 (스코어링 시 자동 생성, translate-titles로 backfill)
 -- 실패 시 fallback score=50
 ```
 
@@ -43,13 +45,20 @@ raw_item_id UNIQUE FK  -- 재스코어링 시 raw_items 보존
 ```
 트렌드 쿼리 최적화 목적. keyword_mentions에서 매일 집계.
 
-## trend_alerts — z-score 임계값 초과
+## trend_alerts — z-score 임계값 초과 + 장기 가속
 ```sql
 (keyword, alert_date) UNIQUE
 -- z_score = (today_count - avg_30d) / std_30d
--- severity: 'notable' (z>2.0) | 'urgent' (z>3.0)
+-- severity: 'notable' (z>2.0) | 'urgent' (z>3.0) | 'accelerating' (4주 연속 상승)
 -- MIN_HISTORY_DAYS=7 미만이면 skip (콜드스타트 보호)
 -- llm_interpretation: Claude Haiku 한국어 해석
+```
+
+## keyword_cooccurrences — 키워드 동시출현
+```sql
+(keyword_a, keyword_b, mention_date) UNIQUE
+-- 같은 아이템에서 2개 이상 키워드가 매칭될 때 쌍별 카운트
+-- 대시보드 네트워크 그래프의 데이터 소스
 ```
 
 ## digests — 일일 다이제스트

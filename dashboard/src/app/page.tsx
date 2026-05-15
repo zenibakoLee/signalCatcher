@@ -1,5 +1,6 @@
 import { getDb } from "@/lib/db";
 import type { ScoredItem, TrendAlert, Digest } from "@/lib/types";
+import { DatePicker } from "@/components/date-picker";
 
 export const dynamic = "force-dynamic";
 
@@ -16,14 +17,19 @@ function sourceLabel(source: string) {
   return labels[source] || source;
 }
 
-export default function Home() {
+export default async function Home({
+  searchParams,
+}: {
+  searchParams: Promise<{ date?: string }>;
+}) {
+  const { date } = await searchParams;
   const db = getDb();
 
-  const digest = db.prepare(
-    "SELECT * FROM digests ORDER BY digest_date DESC LIMIT 1"
-  ).get() as Digest | undefined;
+  const availableDates = (
+    db.prepare("SELECT digest_date FROM digests ORDER BY digest_date ASC").all() as { digest_date: string }[]
+  ).map((r) => r.digest_date);
 
-  if (!digest) {
+  if (availableDates.length === 0) {
     return (
       <div className="text-center py-20">
         <h1 className="font-serif text-3xl font-bold mb-4">시그널 캐처</h1>
@@ -32,23 +38,33 @@ export default function Home() {
     );
   }
 
+  const targetDate = date && availableDates.includes(date)
+    ? date
+    : availableDates[availableDates.length - 1];
+
+  const digest = db.prepare(
+    "SELECT * FROM digests WHERE digest_date = ?"
+  ).get(targetDate) as Digest;
+
   const topItems = db.prepare(`
-    SELECT s.score, s.score_reasoning, s.category,
+    SELECT s.score, s.score_reasoning, s.category, s.title_ko,
            r.title, r.url, r.source, r.content_snippet
     FROM scored_items s
     JOIN raw_items r ON s.raw_item_id = r.id
     WHERE date(r.collected_at) = ?
     ORDER BY s.score DESC LIMIT 10
-  `).all(digest.digest_date) as ScoredItem[];
+  `).all(targetDate) as ScoredItem[];
 
   const alerts = db.prepare(
     "SELECT * FROM trend_alerts WHERE alert_date = ? ORDER BY z_score DESC"
-  ).all(digest.digest_date) as TrendAlert[];
+  ).all(targetDate) as TrendAlert[];
 
   return (
     <div className="space-y-8">
       <header className="border-b border-light-gray pb-6">
-        <p className="text-sm text-warm-gray mb-2">{digest.digest_date}</p>
+        <div className="relative mb-3">
+          <DatePicker currentDate={targetDate} availableDates={availableDates} />
+        </div>
         <h1 className="font-serif text-3xl font-bold leading-tight mb-3">{digest.headline}</h1>
       </header>
 
@@ -79,7 +95,7 @@ export default function Home() {
       )}
 
       <section>
-        <h2 className="font-serif text-xl font-bold mb-4">오늘의 시그널 Top 10</h2>
+        <h2 className="font-serif text-xl font-bold mb-4">시그널 Top 10</h2>
         <div className="space-y-3">
           {topItems.map((item, i) => (
             <div key={i} className="bg-white rounded-lg border border-light-gray p-4 hover:border-sage/40 transition-colors">
@@ -96,10 +112,13 @@ export default function Home() {
                   {item.url ? (
                     <a href={item.url} target="_blank" rel="noopener noreferrer"
                        className="font-medium hover:text-sage transition-colors line-clamp-2">
-                      {item.title}
+                      {item.title_ko || item.title}
                     </a>
                   ) : (
-                    <p className="font-medium line-clamp-2">{item.title}</p>
+                    <p className="font-medium line-clamp-2">{item.title_ko || item.title}</p>
+                  )}
+                  {item.title_ko && (
+                    <p className="text-xs text-warm-gray mt-0.5 line-clamp-1">{item.title}</p>
                   )}
                   {item.score_reasoning && (
                     <p className="text-sm text-warm-gray mt-1 line-clamp-2">{item.score_reasoning}</p>

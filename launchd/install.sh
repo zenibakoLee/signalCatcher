@@ -12,6 +12,8 @@ PLISTS=(
     "com.signalcatcher.daily"
     "com.signalcatcher.weekly"
     "com.signalcatcher.event"
+    "com.signalcatcher.dashboard"
+    "com.signalcatcher.tunnel"
 )
 
 case "${1:-install}" in
@@ -28,10 +30,12 @@ case "${1:-install}" in
             echo "Installed: $name"
         done
         echo ""
-        echo "All schedules installed:"
-        echo "  daily  — 매일 07:00"
-        echo "  weekly — 매주 일요일 09:00"
-        echo "  event  — 매일 20:00"
+        echo "All services installed:"
+        echo "  daily     — 매일 07:00"
+        echo "  weekly    — 매주 일요일 09:00"
+        echo "  event     — 매일 20:00"
+        echo "  dashboard — 상시 (port 3000)"
+        echo "  tunnel    — 상시 (Cloudflare Quick Tunnel)"
         echo ""
         echo "Verify: launchctl list | grep signalcatcher"
         ;;

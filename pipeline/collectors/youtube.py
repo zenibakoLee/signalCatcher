@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import logging
 import os
-from datetime import datetime
+from datetime import datetime, timedelta
 
 import httpx
 
@@ -29,7 +29,8 @@ class YouTubeCollector(BaseCollector):
             return []
 
         items: list[RawItem] = []
-        since_iso = since.strftime("%Y-%m-%dT%H:%M:%SZ")
+        effective_since = since - timedelta(days=6)
+        since_iso = effective_since.strftime("%Y-%m-%dT%H:%M:%SZ")
 
         async with httpx.AsyncClient(timeout=30) as client:
             for ch in self.channels:

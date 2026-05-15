@@ -236,6 +236,45 @@ def deliver_keyword_suggestions(suggestions: list[dict]) -> bool:
         return False
 
 
+def deliver_acceleration_alerts(alerts: list) -> bool:
+    webhook_url = os.environ.get("DISCORD_WEBHOOK_URL")
+    if not webhook_url or not alerts:
+        return False
+
+    lines = []
+    for a in alerts[:10]:
+        growth_pct = round(a.z_score * 100)
+        lines.append(
+            f"**{a.keyword}** — +{growth_pct}% 성장 (4주 연속 상승)\n"
+            f"최근 주간 평균 {a.moving_avg_7d}회 · 전체 평균 {a.moving_avg_30d}회"
+        )
+
+    description = "\n\n".join(lines)
+    if len(description) > MAX_DESCRIPTION:
+        description = description[: MAX_DESCRIPTION - 3] + "..."
+
+    embed = {
+        "title": "📊 장기 가속 감지",
+        "description": description,
+        "color": SAGE_GREEN,
+        "footer": {"text": "시그널 캐처 | 주간 이동평균 4주 연속 상승"},
+    }
+
+    try:
+        with httpx.Client(timeout=30) as client:
+            resp = client.post(
+                webhook_url,
+                json={"embeds": [embed]},
+                headers={"Content-Type": "application/json"},
+            )
+            resp.raise_for_status()
+        logger.info("Discord: acceleration alerts delivered (%d items)", len(alerts))
+        return True
+    except Exception:
+        logger.exception("Discord: failed to deliver acceleration alerts")
+        return False
+
+
 def deliver_error_alert(pipeline_type: str, error_msg: str) -> bool:
     webhook_url = os.environ.get("DISCORD_WEBHOOK_URL")
     if not webhook_url:

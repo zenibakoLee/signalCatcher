@@ -134,3 +134,61 @@
 **맥락**: "AI"가 "SAID", "FAIR"에 매칭되면 트렌드 데이터 오염. 멀티워드("mixture of experts")는 자연스럽게 구문 매칭.
 
 **한계**: 한국어 키워드는 `\b`가 제대로 작동하지 않음. 현재 영문 키워드 중심 설계.
+
+---
+
+## ADR-014: 장기 가속 감지 (4주 연속 상승)
+
+**결정**: z-score 스파이크 외에, 4주 연속 주간 평균 상승을 `accelerating` severity로 분류.
+
+**맥락**: z-score는 단기 급등만 감지. 투자에서 중요한 것은 *점진적이지만 지속적인* 상승 추세. NVIDIA의 CUDA 생태계처럼 수개월에 걸친 가속 패턴.
+
+**구현**: 35일 데이터에서 4주간 주간 평균 계산 → 4주 연속 상승 + 최소 weekly avg 1.0 → severity="accelerating", z_score=growth_rate.
+
+---
+
+## ADR-015: 키워드 동시출현 추적
+
+**결정**: 같은 아이템에서 2개 이상 키워드가 매칭되면 쌍별 카운트를 `keyword_cooccurrences` 테이블에 저장.
+
+**맥락**: 개별 키워드 빈도만으로는 기술 간 *관계 변화*를 포착 불가. "NVIDIA"와 "robotics"가 함께 언급되기 시작하면 새로운 투자 테마 신호.
+
+**시각화**: 대시보드 트렌드 페이지에서 SVG 네트워크 그래프로 표시. 노드 크기=총 동시출현 횟수, 엣지 두께=쌍별 빈도.
+
+---
+
+## ADR-016: arXiv/YouTube 수집 윈도우 확장 (24시간 → 7일)
+
+**결정**: arXiv와 YouTube 컬렉터의 날짜 필터를 `since - 6일`로 확장.
+
+**맥락**: arXiv 논문은 제출 후 며칠 뒤에 검색 결과에 나타남. YouTube 채널도 매일 업로드하지 않음. 24시간 윈도우에서는 모든 항목이 필터링되어 수집량 0.
+
+**안전장치**: `UNIQUE(source, source_id)` 제약으로 중복 삽입 방지. 같은 논문/영상이 여러 번 수집되어도 무시됨.
+
+---
+
+## ADR-017: Cloudflare Quick Tunnel (도메인 불필요 외부 접속)
+
+**결정**: 도메인 구매 없이 Cloudflare Quick Tunnel로 대시보드 외부 접속.
+
+**맥락**: 개인 투자 대시보드에 도메인 비용 불필요. Quick Tunnel은 재시작 시 URL 변경되지만, 시작 스크립트가 Discord에 새 URL 자동 전송.
+
+**트레이드오프**: URL 비고정, Cloudflare SLA 없음. 향후 도메인 필요 시 Named Tunnel로 마이그레이션 가능.
+
+---
+
+## ADR-018: GitHub 수집 품질 필터 강화
+
+**결정**: GitHub 키워드 검색 `stars:>5` → `stars:>50`, 트렌딩 `stars:>100` → `stars:>500`. "rising stars"(30일 이내 생성 stars:>100)와 "major releases"(stars:>1000 최근 푸시) 쿼리 추가.
+
+**맥락**: 낮은 star 임계값으로 비인기 레포가 대량 수집되어 투자 신호로서 가치 없음. 투자 기회 신호에는 이미 검증된 프로젝트의 활동 변화가 더 유의미.
+
+---
+
+## ADR-019: DB 파일 mtime 기반 자동 새로고침
+
+**결정**: 대시보드에서 3초마다 SQLite DB 파일의 mtime을 폴링, 변경 시 `router.refresh()`로 Server Components 재실행.
+
+**맥락**: 파이프라인이 DB에 새 데이터를 쓸 때 대시보드가 자동 반영되어야 함. Turbopack의 HMR은 소스코드 변경만 감지하고 데이터 변경은 감지 불가.
+
+**대안**: WebSocket(과잉), nodemon 재시작(전체 리로드로 UX 저하). mtime 폴링은 가볍고 변경 시에만 refresh.

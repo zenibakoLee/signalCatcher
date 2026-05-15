@@ -59,15 +59,20 @@ def count_keywords_for_items(
 
 def _count_rows(conn, patterns: dict, rows: list, date_str: str) -> None:
     counts: dict[tuple[str, str], list[int]] = {}
+    item_keywords: dict[int, list[str]] = {}
 
     for row in rows:
         text = (row["title"] or "") + " " + (row["content_snippet"] or "")
+        matched_kws = []
         for kw, pattern in patterns.items():
             if pattern.search(text):
                 key = (kw, row["source"])
                 if key not in counts:
                     counts[key] = []
                 counts[key].append(row["id"])
+                matched_kws.append(kw)
+        if len(matched_kws) >= 2:
+            item_keywords[row["id"]] = matched_kws
 
     for (kw, source), matched_ids in counts.items():
         sample = json.dumps(matched_ids[:5])
@@ -80,8 +85,37 @@ def _count_rows(conn, patterns: dict, rows: list, date_str: str) -> None:
             (kw, source, date_str, len(matched_ids), sample),
         )
 
+    _count_cooccurrences(conn, item_keywords, date_str)
+
     conn.commit()
     logger.info("Keyword counter: %d keyword-source pairs for %s", len(counts), date_str)
+
+
+def _count_cooccurrences(conn, item_keywords: dict[int, list[str]], date_str: str) -> None:
+    pair_counts: dict[tuple[str, str], list[int]] = {}
+
+    for item_id, kws in item_keywords.items():
+        kws_sorted = sorted(kws)
+        for i in range(len(kws_sorted)):
+            for j in range(i + 1, len(kws_sorted)):
+                pair = (kws_sorted[i], kws_sorted[j])
+                if pair not in pair_counts:
+                    pair_counts[pair] = []
+                pair_counts[pair].append(item_id)
+
+    for (kw_a, kw_b), item_ids in pair_counts.items():
+        sample = json.dumps(item_ids[:5])
+        conn.execute(
+            """INSERT INTO keyword_cooccurrences (keyword_a, keyword_b, mention_date, co_count, sample_item_ids)
+               VALUES (?, ?, ?, ?, ?)
+               ON CONFLICT(keyword_a, keyword_b, mention_date)
+               DO UPDATE SET co_count = excluded.co_count,
+                             sample_item_ids = excluded.sample_item_ids""",
+            (kw_a, kw_b, date_str, len(item_ids), sample),
+        )
+
+    if pair_counts:
+        logger.info("Co-occurrences: %d pairs for %s", len(pair_counts), date_str)
 
 
 def _aggregate_daily(conn: sqlite3.Connection, date_str: str) -> None:

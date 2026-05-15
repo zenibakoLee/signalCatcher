@@ -4,7 +4,7 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 
 const links = [
-  { href: "/", label: "오늘의 다이제스트" },
+  { href: "/", label: "다이제스트" },
   { href: "/signals", label: "시그널" },
   { href: "/trends", label: "트렌드" },
   { href: "/events", label: "컨퍼런스" },

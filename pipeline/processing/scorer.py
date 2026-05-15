@@ -68,22 +68,25 @@ def _score_batch(
     user_message = (
         "Score these items. Return ONLY a JSON array, no other text:\n\n"
         + "\n".join(items_text)
-        + '\n\nReturn: [{"index": 1, "score": 85, "reasoning": "...", "category": "..."}, ...]'
+        + '\n\nReturn: [{"index": 1, "score": 85, "reasoning": "...", "category": "...", "title_ko": "한국어 제목 번역"}, ...]'
+        + "\n\ntitle_ko: 각 항목의 제목을 자연스러운 한국어로 번역하세요. 고유명사(회사명, 제품명, 기술명)는 원어 그대로 유지하세요."
     )
 
     try:
         response = client.messages.create(
             model=MODEL,
-            max_tokens=2000,
+            max_tokens=4000,
             system=system_prompt,
             messages=[{"role": "user", "content": user_message}],
         )
         text = response.content[0].text.strip()
         scores = _parse_scores(text)
+        if not scores:
+            raise ValueError("Empty scores from LLM response")
     except Exception:
         logger.exception("Scorer: LLM call failed for batch, using fallback scores")
         scores = [
-            {"index": i, "score": 50, "reasoning": "Auto-scored: LLM unavailable", "category": "trend"}
+            {"index": i, "score": 50, "reasoning": "Auto-scored: LLM unavailable", "category": "trend", "title_ko": None}
             for i in range(1, len(batch) + 1)
         ]
 
@@ -97,13 +100,14 @@ def _score_batch(
         try:
             conn.execute(
                 """INSERT OR IGNORE INTO scored_items
-                   (raw_item_id, score, score_reasoning, category, model_used)
-                   VALUES (?, ?, ?, ?, ?)""",
+                   (raw_item_id, score, score_reasoning, category, title_ko, model_used)
+                   VALUES (?, ?, ?, ?, ?, ?)""",
                 (
                     row["id"],
                     max(0, min(100, score_entry.get("score", 50))),
                     score_entry.get("reasoning", ""),
                     score_entry.get("category", "trend"),
+                    score_entry.get("title_ko"),
                     MODEL,
                 ),
             )

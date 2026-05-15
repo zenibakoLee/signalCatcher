@@ -37,16 +37,19 @@ class GitHubCollector(BaseCollector):
         since_date = since.strftime("%Y-%m-%d")
 
         async with httpx.AsyncClient(timeout=30, headers=headers) as client:
+            # --- keyword searches (stars:>50 to filter noise) ---
             for kw in keywords:
                 await self.rate_limiter.acquire()
                 try:
-                    query = f"{kw} created:>{since_date} stars:>5"
+                    query = f"{kw} created:>{since_date} stars:>50"
                     kw_items = await self._search(client, query, seen)
                     items.extend(kw_items)
                 except Exception:
                     logger.exception("GitHub: failed keyword '%s'", kw)
 
             yesterday = max(since, datetime.now() - timedelta(days=1)).strftime("%Y-%m-%d")
+
+            # --- extra topic queries from config ---
             for extra in self.extra_queries:
                 await self.rate_limiter.acquire()
                 try:
@@ -56,11 +59,12 @@ class GitHubCollector(BaseCollector):
                 except Exception:
                     logger.exception("GitHub: failed extra query '%s'", extra)
 
+            # --- trending: established repos with recent activity ---
             await self.rate_limiter.acquire()
             try:
                 trending = await self._search(
                     client,
-                    f"stars:>100 pushed:>{yesterday}",
+                    f"stars:>500 pushed:>{yesterday}",
                     seen,
                     sort="stars",
                     per_page=30,
@@ -68,6 +72,35 @@ class GitHubCollector(BaseCollector):
                 items.extend(trending)
             except Exception:
                 logger.exception("GitHub: failed trending query")
+
+            # --- rising stars: new repos that went viral (<30 days old, >100 stars) ---
+            thirty_days_ago = (datetime.now() - timedelta(days=30)).strftime("%Y-%m-%d")
+            await self.rate_limiter.acquire()
+            try:
+                rising = await self._search(
+                    client,
+                    f"created:>{thirty_days_ago} stars:>100",
+                    seen,
+                    sort="stars",
+                    per_page=30,
+                )
+                items.extend(rising)
+            except Exception:
+                logger.exception("GitHub: failed rising-stars query")
+
+            # --- major releases: large repos with recent pushes ---
+            await self.rate_limiter.acquire()
+            try:
+                major = await self._search(
+                    client,
+                    f"stars:>1000 pushed:>{yesterday}",
+                    seen,
+                    sort="updated",
+                    per_page=30,
+                )
+                items.extend(major)
+            except Exception:
+                logger.exception("GitHub: failed major-releases query")
 
         logger.info("GitHub: collected %d items", len(items))
         return items

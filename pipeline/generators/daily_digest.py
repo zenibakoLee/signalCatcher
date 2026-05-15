@@ -70,10 +70,10 @@ def generate_digest(target_date: date | None = None) -> dict | None:
             )
         trends_block = "\n\nTREND ALERTS:\n" + "\n".join(trend_lines)
 
-    prompt = f"""당신은 {date_str}의 일일 투자 시그널 다이제스트를 작성하는 분석가입니다.
+    prompt = f"""당신은 매크로 투자자를 위한 기술 시그널 분석가입니다.
 모든 출력은 반드시 한국어로 작성하세요.
 
-아래는 오늘 기술 소스(HN, arXiv, GitHub, RSS, YouTube)에서 수집된 상위 항목입니다.
+아래는 {date_str} 기술 소스(HN, arXiv, GitHub, RSS, YouTube)에서 수집된 상위 항목입니다.
 투자 기회 관련도에 따라 이미 점수가 매겨져 있습니다.{trends_block}
 
 항목:
@@ -81,13 +81,13 @@ def generate_digest(target_date: date | None = None) -> dict | None:
 
 아래 JSON 형식으로 다이제스트를 생성하세요:
 {{
-  "headline": "오늘의 가장 중요한 시그널을 요약하는 한 줄 헤드라인 (최대 80자, 한국어)",
-  "summary": "오늘의 핵심 테마와 시그널을 요약하는 2-3문장 (한국어)",
+  "headline": "오늘 가장 투자 임팩트가 큰 단일 시그널을 구체적으로 지목하는 한 줄 (최대 80자, 한국어). 모든 것을 하나의 추상적 테마로 묶지 말 것. 예: 'Cerebras $5.5B IPO 성공 — AI 전용 칩 시장 본격 개화' 처럼 구체적 사건+의미 구조.",
+  "summary": "오늘 수집된 시그널 중 투자 판단에 직접 영향을 주는 2-3개를 각각 한 문장으로 설명 (한국어). 추상적 종합이 아니라 개별 시그널의 구체적 의미를 전달할 것.",
   "top_items_commentary": [
     {{"title": "항목 제목 (원문 유지)", "score": 85, "source": "HN", "url": "...", "commentary": "투자자에게 왜 중요한지 한 문장 설명 (한국어)"}}
   ],
   "trend_section": "트렌드 알림이 있으면 2-3문장으로 해석 (한국어). 없으면 빈 문자열.",
-  "one_line_takeaway": "오늘의 가장 실행 가능한 인사이트 한 줄 (한국어)"
+  "one_line_takeaway": "오늘의 가장 실행 가능한 인사이트 한 줄 (한국어). '주목할 필요가 있다' 같은 모호한 표현 대신 구체적 포지션/섹터/기업을 지목할 것."
 }}
 
 유효한 JSON만 반환하세요."""

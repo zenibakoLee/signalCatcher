@@ -134,6 +134,11 @@ def daily(hours: int):
             from datetime import date
             deliver_digest(digest_data, date.today().isoformat())
 
+        accel_alerts = [a for a in trend_alerts if a.severity == "accelerating"]
+        if accel_alerts:
+            from pipeline.delivery.discord_webhook import deliver_acceleration_alerts
+            deliver_acceleration_alerts(accel_alerts)
+
         duration = time.time() - start
         status = "completed" if not errors else "completed_with_errors"
         complete_pipeline_run(
@@ -292,6 +297,106 @@ def event(target_date: str | None):
         data = generate_post_event(conf)
         if data:
             deliver_conference_briefing(data, conf, "post_event")
+
+
+@cli.command("score-all")
+@click.option("--batch-limit", default=200, help="Max items to score in one run")
+def score_all(batch_limit: int):
+    """Score all unscored items across all sources."""
+    from pipeline.db import get_connection
+    from pipeline.processing.scorer import score_items
+
+    conn = get_connection()
+    unscored = conn.execute(
+        """SELECT r.id FROM raw_items r
+           LEFT JOIN scored_items s ON s.raw_item_id = r.id
+           WHERE s.id IS NULL
+           ORDER BY r.published_at DESC
+           LIMIT ?""",
+        (batch_limit,),
+    ).fetchall()
+
+    ids = [r["id"] for r in unscored]
+    if not ids:
+        logger.info("score-all: no unscored items")
+        return
+
+    logger.info("score-all: scoring %d items", len(ids))
+    scored = score_items(ids)
+    logger.info("score-all: %d items scored", scored)
+
+
+@cli.command("translate-titles")
+@click.option("--batch-limit", default=500, help="Max items to translate in one run")
+def translate_titles(batch_limit: int):
+    """Backfill title_ko for scored items missing Korean translations."""
+    from pipeline.db import get_connection
+
+    conn = get_connection()
+    rows = conn.execute(
+        """SELECT s.id, r.title
+           FROM scored_items s
+           JOIN raw_items r ON s.raw_item_id = r.id
+           WHERE s.title_ko IS NULL
+           ORDER BY s.id DESC
+           LIMIT ?""",
+        (batch_limit,),
+    ).fetchall()
+
+    if not rows:
+        logger.info("translate-titles: all items already translated")
+        return
+
+    logger.info("translate-titles: %d items to translate", len(rows))
+
+    import anthropic
+    client = anthropic.Anthropic()
+    batch_size = 30
+    total = 0
+
+    for batch_start in range(0, len(rows), batch_size):
+        batch = rows[batch_start : batch_start + batch_size]
+        titles_block = "\n".join(
+            f'{i+1}. "{row["title"]}"' for i, row in enumerate(batch)
+        )
+
+        prompt = (
+            f"아래 영어 제목들을 자연스러운 한국어로 번역하세요.\n"
+            f"고유명사(회사명, 제품명, 기술명)는 원어 그대로 유지하세요.\n\n"
+            f"{titles_block}\n\n"
+            f'JSON 배열로 반환: [{{"index": 1, "title_ko": "번역된 제목"}}, ...]\n'
+            f"유효한 JSON만 반환하세요."
+        )
+
+        try:
+            response = client.messages.create(
+                model="claude-haiku-4-5-20251001",
+                max_tokens=3000,
+                messages=[{"role": "user", "content": prompt}],
+            )
+            text = response.content[0].text.strip()
+            if text.startswith("```"):
+                lines = text.split("\n")
+                text = "\n".join(lines[1:-1] if lines[-1].strip() == "```" else lines[1:])
+
+            import json
+            translations = json.loads(text)
+
+            for entry in translations:
+                idx = entry.get("index", 0) - 1
+                title_ko = entry.get("title_ko")
+                if idx < 0 or idx >= len(batch) or not title_ko:
+                    continue
+                conn.execute(
+                    "UPDATE scored_items SET title_ko = ? WHERE id = ?",
+                    (title_ko, batch[idx]["id"]),
+                )
+                total += 1
+            conn.commit()
+        except Exception:
+            logger.exception("translate-titles: batch failed at offset %d", batch_start)
+
+    logger.info("translate-titles: %d items translated", total)
 
 
 if __name__ == "__main__":
