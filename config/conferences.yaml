@@ -1,0 +1,28 @@
+conferences:
+  - name: "Google I/O 2026"
+    organizer: "Google"
+    start_date: "2026-05-20"
+    end_date: "2026-05-21"
+    search_terms: ["Google I/O", "Google IO 2026"]
+    expected_topics: ["Gemini", "Android AI", "TPU"]
+
+  - name: "WWDC 2026"
+    organizer: "Apple"
+    start_date: "2026-06-08"
+    end_date: "2026-06-12"
+    search_terms: ["WWDC", "Apple developer conference", "Apple AI"]
+    expected_topics: ["on-device AI", "Siri", "Apple Intelligence"]
+
+  - name: "NeurIPS 2026"
+    organizer: "NeurIPS Foundation"
+    start_date: "2026-12-06"
+    end_date: "2026-12-12"
+    search_terms: ["NeurIPS", "NeurIPS 2026"]
+    expected_topics: ["machine learning research", "AI safety", "LLM scaling"]
+
+  - name: "NVIDIA GTC 2027"
+    organizer: "NVIDIA"
+    start_date: "2027-03-17"
+    end_date: "2027-03-20"
+    search_terms: ["GTC", "NVIDIA GTC", "GPU Technology Conference"]
+    expected_topics: ["GPU", "CUDA", "inference", "robotics"]

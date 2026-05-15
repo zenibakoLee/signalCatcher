@@ -1,0 +1,66 @@
+keywords:
+  ai_model:
+    - "GPT-5"
+    - "Claude 4"
+    - "Gemini Ultra"
+    - "Llama 4"
+    - "Mistral Large"
+    - "multimodal model"
+    - "foundation model"
+    - "small language model"
+    - "reasoning model"
+
+  hardware:
+    - "NVIDIA"
+    - "H100"
+    - "B200"
+    - "Blackwell"
+    - "TPU v6"
+    - "Groq LPU"
+    - "neuromorphic"
+    - "photonic computing"
+    - "quantum computing"
+    - "RISC-V AI"
+
+  framework:
+    - "PyTorch"
+    - "JAX"
+    - "MLX"
+    - "vLLM"
+    - "ONNX Runtime"
+    - "TensorRT"
+    - "triton inference"
+
+  concept:
+    - "AI agent"
+    - "agentic workflow"
+    - "chain of thought"
+    - "RLHF"
+    - "constitutional AI"
+    - "mixture of experts"
+    - "retrieval augmented generation"
+    - "synthetic data"
+    - "model distillation"
+    - "edge AI"
+    - "embodied AI"
+    - "world model"
+    - "test-time compute"
+
+  company:
+    - "Anthropic"
+    - "OpenAI"
+    - "DeepMind"
+    - "Mistral AI"
+    - "Hugging Face"
+    - "Databricks"
+    - "Scale AI"
+    - "Cerebras"
+    - "SambaNova"
+
+  infrastructure:
+    - "inference optimization"
+    - "model serving"
+    - "AI datacenter"
+    - "liquid cooling"
+    - "nuclear power AI"
+    - "sovereign AI"
