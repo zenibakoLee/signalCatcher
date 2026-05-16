@@ -64,8 +64,8 @@ class ArxivCollector(BaseCollector):
         cat_query = "+OR+".join(f"cat:{c}" for c in self.categories)
         search_query = f"all:{quote(keyword)}+AND+({cat_query})"
 
-        resp = await with_retry(
-            lambda: client.get(
+        async def _do_request():
+            r = await client.get(
                 ARXIV_BASE,
                 params={
                     "search_query": search_query,
@@ -74,8 +74,10 @@ class ArxivCollector(BaseCollector):
                     "max_results": "20",
                 },
             )
-        )
-        resp.raise_for_status()
+            r.raise_for_status()
+            return r
+
+        resp = await with_retry(_do_request)
 
         return self._parse_atom(resp.text, since, seen)
 

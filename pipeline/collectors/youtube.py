@@ -61,8 +61,8 @@ class YouTubeCollector(BaseCollector):
         channel_id = channel.get("channel_id", "")
         playlist_id = "UU" + channel_id[2:]
 
-        resp = await with_retry(
-            lambda: client.get(
+        async def _do_request():
+            r = await client.get(
                 f"{YT_API}/playlistItems",
                 params={
                     "part": "snippet",
@@ -71,8 +71,10 @@ class YouTubeCollector(BaseCollector):
                     "key": api_key,
                 },
             )
-        )
-        resp.raise_for_status()
+            r.raise_for_status()
+            return r
+
+        resp = await with_retry(_do_request)
         self._quota_used += 1
 
         data = resp.json()

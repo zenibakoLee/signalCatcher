@@ -113,8 +113,8 @@ class GitHubCollector(BaseCollector):
         sort: str = "stars",
         per_page: int = 20,
     ) -> list[RawItem]:
-        resp = await with_retry(
-            lambda: client.get(
+        async def _do_request():
+            r = await client.get(
                 f"{GITHUB_API}/search/repositories",
                 params={
                     "q": query,
@@ -123,8 +123,10 @@ class GitHubCollector(BaseCollector):
                     "per_page": per_page,
                 },
             )
-        )
-        resp.raise_for_status()
+            r.raise_for_status()
+            return r
+
+        resp = await with_retry(_do_request)
         data = resp.json()
 
         items: list[RawItem] = []

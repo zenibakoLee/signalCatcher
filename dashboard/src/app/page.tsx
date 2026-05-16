@@ -58,7 +58,7 @@ export default async function Home({
       WHERE r.collected_at >= ? AND r.collected_at < ?
     )
     SELECT score, score_reasoning, category, title_ko, title, url, source, content_snippet
-    FROM ranked WHERE rn <= 2
+    FROM ranked WHERE rn <= 3
     ORDER BY score DESC LIMIT 10
   `).all(utcStart, utcEnd) as ScoredItem[];
 

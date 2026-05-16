@@ -41,13 +41,16 @@ class HackerNewsCollector(BaseCollector):
         self, client: httpx.AsyncClient, seen: set[str]
     ) -> list[RawItem]:
         await self.rate_limiter.acquire()
-        resp = await with_retry(
-            lambda: client.get(
+
+        async def _do_front_page():
+            r = await client.get(
                 f"{ALGOLIA_BASE}/search",
                 params={"tags": "front_page", "hitsPerPage": 30},
             )
-        )
-        resp.raise_for_status()
+            r.raise_for_status()
+            return r
+
+        resp = await with_retry(_do_front_page)
         return self._parse_hits(resp.json().get("hits", []), seen)
 
     async def _search_keyword(
@@ -57,8 +60,8 @@ class HackerNewsCollector(BaseCollector):
         since_ts: int,
         seen: set[str],
     ) -> list[RawItem]:
-        resp = await with_retry(
-            lambda: client.get(
+        async def _do_search():
+            r = await client.get(
                 f"{ALGOLIA_BASE}/search",
                 params={
                     "query": keyword,
@@ -67,8 +70,10 @@ class HackerNewsCollector(BaseCollector):
                     "hitsPerPage": 50,
                 },
             )
-        )
-        resp.raise_for_status()
+            r.raise_for_status()
+            return r
+
+        resp = await with_retry(_do_search)
         return self._parse_hits(resp.json().get("hits", []), seen)
 
     def _parse_hits(self, hits: list[dict], seen: set[str]) -> list[RawItem]:

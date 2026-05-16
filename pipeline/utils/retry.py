@@ -11,7 +11,7 @@ logger = logging.getLogger(__name__)
 
 T = TypeVar("T")
 
-NON_RETRYABLE = {401, 403, 404, 422}
+NON_RETRYABLE = {401, 404, 422}
 
 
 async def with_retry(
