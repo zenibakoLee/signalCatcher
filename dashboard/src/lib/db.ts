@@ -12,3 +12,12 @@ export function getDb(): Database.Database {
   }
   return _db;
 }
+
+export function kstDateToUtcRange(dateStr: string): [string, string] {
+  const [y, m, d] = dateStr.split("-").map(Number);
+  const kstStart = new Date(Date.UTC(y, m - 1, d, -9));
+  const kstEnd = new Date(kstStart.getTime() + 86400000);
+  const fmt = (dt: Date) =>
+    dt.toISOString().replace("Z", "").split(".")[0];
+  return [fmt(kstStart), fmt(kstEnd)];
+}

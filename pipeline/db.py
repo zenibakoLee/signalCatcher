@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from pipeline.models import RawItem
@@ -77,14 +78,25 @@ def insert_raw_item(item: RawItem) -> int | None:
         raise
 
 
+def _kst_date_to_utc_range(date_str: str) -> tuple[str, str]:
+    """Convert a KST date string (YYYY-MM-DD) to UTC start/end timestamps."""
+    KST = timezone(timedelta(hours=9))
+    parts = [int(p) for p in date_str.split("-")]
+    kst_start = datetime(parts[0], parts[1], parts[2], tzinfo=KST)
+    utc_start = kst_start.astimezone(timezone.utc)
+    utc_end = utc_start + timedelta(days=1)
+    return utc_start.strftime("%Y-%m-%dT%H:%M:%S"), utc_end.strftime("%Y-%m-%dT%H:%M:%S")
+
+
 def get_unscored_items(date: str) -> list[dict]:
     conn = get_connection()
+    utc_start, utc_end = _kst_date_to_utc_range(date)
     rows = conn.execute(
         """SELECT r.id, r.source, r.title, r.url, r.content_snippet, r.metadata
            FROM raw_items r
            LEFT JOIN scored_items s ON r.id = s.raw_item_id
-           WHERE s.id IS NULL AND date(r.collected_at) = ?""",
-        (date,),
+           WHERE s.id IS NULL AND r.collected_at >= ? AND r.collected_at < ?""",
+        (utc_start, utc_end),
     ).fetchall()
     return [dict(r) for r in rows]
 

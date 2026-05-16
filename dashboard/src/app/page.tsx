@@ -1,4 +1,4 @@
-import { getDb } from "@/lib/db";
+import { getDb, kstDateToUtcRange } from "@/lib/db";
 import type { ScoredItem, TrendAlert, Digest } from "@/lib/types";
 import { DatePicker } from "@/components/date-picker";
 
@@ -46,6 +46,8 @@ export default async function Home({
     "SELECT * FROM digests WHERE digest_date = ?"
   ).get(targetDate) as Digest;
 
+  const [utcStart, utcEnd] = kstDateToUtcRange(targetDate);
+
   const topItems = db.prepare(`
     WITH ranked AS (
       SELECT s.score, s.score_reasoning, s.category, s.title_ko,
@@ -53,12 +55,12 @@ export default async function Home({
              ROW_NUMBER() OVER (PARTITION BY r.source ORDER BY s.score DESC) as rn
       FROM scored_items s
       JOIN raw_items r ON s.raw_item_id = r.id
-      WHERE date(r.collected_at) = ?
+      WHERE r.collected_at >= ? AND r.collected_at < ?
     )
     SELECT score, score_reasoning, category, title_ko, title, url, source, content_snippet
     FROM ranked WHERE rn <= 2
     ORDER BY score DESC LIMIT 10
-  `).all(targetDate) as ScoredItem[];
+  `).all(utcStart, utcEnd) as ScoredItem[];
 
   const alerts = db.prepare(
     "SELECT * FROM trend_alerts WHERE alert_date = ? ORDER BY z_score DESC"

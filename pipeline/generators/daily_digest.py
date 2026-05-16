@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 import logging
-from datetime import date
+from datetime import date, datetime, timedelta, timezone
 
 import anthropic
 
@@ -12,10 +12,20 @@ logger = logging.getLogger(__name__)
 
 MODEL = "claude-haiku-4-5-20251001"
 
+KST = timezone(timedelta(hours=9))
+
+
+def _kst_date_to_utc_range(d: date) -> tuple[str, str]:
+    """Convert a KST date to UTC start/end timestamps for DB queries."""
+    kst_start = datetime(d.year, d.month, d.day, tzinfo=KST)
+    utc_start = kst_start.astimezone(timezone.utc)
+    utc_end = utc_start + timedelta(days=1)
+    return utc_start.strftime("%Y-%m-%dT%H:%M:%S"), utc_end.strftime("%Y-%m-%dT%H:%M:%S")
+
 
 def generate_digest(target_date: date | None = None) -> dict | None:
     if target_date is None:
-        target_date = date.today()
+        target_date = datetime.now(KST).date()
     date_str = target_date.isoformat()
 
     conn = get_connection()
@@ -27,15 +37,17 @@ def generate_digest(target_date: date | None = None) -> dict | None:
         logger.info("Digest: already exists for %s", date_str)
         return None
 
+    utc_start, utc_end = _kst_date_to_utc_range(target_date)
+
     top_items = conn.execute(
         """SELECT s.raw_item_id, s.score, s.score_reasoning, s.category,
                   r.title, r.url, r.source, r.content_snippet
            FROM scored_items s
            JOIN raw_items r ON s.raw_item_id = r.id
-           WHERE date(r.collected_at) = ?
+           WHERE r.collected_at >= ? AND r.collected_at < ?
            ORDER BY s.score DESC
            LIMIT 15""",
-        (date_str,),
+        (utc_start, utc_end),
     ).fetchall()
 
     if not top_items:
