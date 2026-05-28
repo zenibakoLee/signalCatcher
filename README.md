@@ -6,7 +6,7 @@ NVIDIA의 2012년 ImageNet 우승 같은 거대한 투자 기회 신호를 포�
 
 ## 핵심 기능
 
-- **일일 파이프라인** — 5개 소스(HN, arXiv, GitHub, RSS, YouTube) 수집 → LLM 스코어링(0-100) → 다이제스트 → Discord 전송
+- **일일 파이프라인** — 6개 소스(HN, arXiv, GitHub, RSS, YouTube, Reddit) 수집 → LLM 스코어링(0-100) → 다이제스트 → Discord 전송
 - **트렌드 감지** — z-score 기반 키워드 가속도 감지 (notable >2.0, urgent >3.0)
 - **Silent Signals** — 컨퍼런스에서 예상했으나 미발표된 항목의 투자적 의미 분석
 - **주간 키워드 제안** — 미추적 빈출 구문을 LLM이 평가 → 신규 키워드 추천
@@ -84,7 +84,7 @@ npm run dev
 npm run build && npm start
 ```
 
-5개 페이지: 다이제스트(캘린더 날짜 선택), 시그널 탐색, 트렌드 차트(멀티타임프레임+동시출현 네트워크), 컨퍼런스 브리핑, 설정
+6개 페이지: 다이제스트(캘린더 날짜 선택), 시그널 탐색, 트렌드 차트(멀티타임프레임+동시출현 네트워크), 컨퍼런스 브리핑, 설정, 에디토리얼(기사 초안 관리)
 
 DB 데이터 변경 시 자동 새로고침 (3초 폴링)
 
@@ -133,7 +133,7 @@ signalCatcher/
 | 파일 | 용도 |
 |------|------|
 | `config/keywords.yaml` | 추적 키워드 (카테고리별) |
-| `config/sources.yaml` | RSS URL, YouTube 채널, GitHub 쿼리 |
+| `config/sources.yaml` | RSS URL, YouTube 채널/검색어, GitHub 쿼리, Reddit 서브레딧 |
 | `config/conferences.yaml` | 컨퍼런스 일정 + 검색어 |
 | `config/scoring_prompt.txt` | Claude 스코어링 시스템 프롬프트 |
 
@@ -141,7 +141,7 @@ signalCatcher/
 
 | 계층 | 기술 |
 |------|------|
-| 수집/분석 | Python 3.12, asyncio, httpx, feedparser |
+| 수집/분석 | Python 3.12, asyncio, httpx, feedparser, praw (Reddit) |
 | LLM | Claude Haiku (스코어링/다이제스트), Sonnet (컨퍼런스) |
 | 저장 | SQLite WAL, 8개 테이블 |
 | 대시보드 | Next.js 16, Tailwind, better-sqlite3 |
