@@ -86,13 +86,15 @@
 
 ---
 
-## ADR-009: YouTube playlistItems (Search API 대신)
+## ADR-009: YouTube playlistItems 기본 + 제한적 Search API 병행
 
-**결정**: YouTube Data API의 `playlistItems` 엔드포인트 사용 (1유닛/호출).
+**결정**: YouTube Data API의 `playlistItems` 엔드포인트를 기본(1유닛/호출)으로 사용하되, 핵심 투자 쿼리 4개에 한해 `search` 엔드포인트(100유닛/호출)를 병행.
 
-**맥락**: `search` 엔드포인트는 100유닛/호출. 일일 할당량 10,000유닛에서 검색만으로 소진 위험.
+**맥락**: `playlistItems`만으로는 등록 채널의 최근 영상만 수집 가능. "NVIDIA Jensen Huang", "AI conference keynote" 등 특정 투자 관련 키워드의 크로스-채널 검색이 불가능. 일일 할당량 10,000유닛에서 채널 12개(12유닛) + 검색 4개(400유닛) = 약 412유닛으로 충분히 여유.
 
-**트레이드오프**: 채널 단위 수집만 가능 (키워드 검색 불가). `sources.yaml`에 관심 채널 등록으로 보완.
+**구현**: `YouTubeCollector.__init__`에 `search_queries` 파라미터 추가. `_search_videos()` 메서드로 search API 호출. `seen_ids` set으로 채널 수집과 검색 수집 간 중복 제거.
+
+**트레이드오프**: 검색 쿼리 수를 4개로 제한하여 할당량 관리. 쿼리 추가 시 일일 할당량 소비율 모니터링 필요.
 
 ---
 
@@ -192,3 +194,27 @@
 **맥락**: 파이프라인이 DB에 새 데이터를 쓸 때 대시보드가 자동 반영되어야 함. Turbopack의 HMR은 소스코드 변경만 감지하고 데이터 변경은 감지 불가.
 
 **대안**: WebSocket(과잉), nodemon 재시작(전체 리로드로 UX 저하). mtime 폴링은 가볍고 변경 시에만 refresh.
+
+---
+
+## ADR-020: Reddit 서브레딧 수집 추가
+
+**결정**: Reddit JSON API(`/r/{sub}/hot.json`)를 사용하여 11개 서브레딧에서 투자 신호를 수집.
+
+**맥락**: Reddit은 기술 커뮤니티(r/MachineLearning, r/nvidia)와 투자 커뮤니티(r/wallstreetbets, r/investing)의 실시간 반응을 동시에 포착할 수 있는 유일한 소스. 기존 5개 소스(HN, arXiv, GitHub, RSS, YouTube)는 공식 발표와 학술 논문 중심으로, 커뮤니티의 체감 반응과 투자 심리를 놓침.
+
+**구현**: `RedditCollector`(115줄)가 `BaseCollector` ABC를 상속. 각 서브레딧에서 hot 25개 조회, stickied 제외, since 이후 필터. metadata에 subreddit, score, num_comments, upvote_ratio, link_flair_text 저장. Rate limit 1.5 req/s.
+
+**인증**: Reddit JSON API는 인증 없이 사용 가능(User-Agent만 필요). OAuth 불필요로 운영 복잡성 최소.
+
+**대안**: Pushshift(서비스 불안정), Reddit OAuth API(과잉, 개인 프로젝트에 앱 등록 불필요), PRAW(동기 라이브러리, asyncio 미지원).
+
+---
+
+## ADR-021: 컨퍼런스 브리핑 윈도우 확장
+
+**결정**: pre-event 윈도우를 `start_date - 2` ~ `start_date - 1`로, post-event 윈도우를 `end_date + 1` ~ `end_date + 3`으로 확장.
+
+**맥락**: 기존에는 pre-event가 `end_date - 1` 정확히 1일, post-event가 `end_date + 1` 정확히 1일로 고정. 다일간 컨퍼런스(예: Computex 4일)의 경우, 시작 전날에만 트리거되면 시차/일정으로 생성 실패 시 재시도 불가. post-event도 다음날 파이프라인 장애 시 놓침.
+
+**결과**: pre-event는 시작 2일 전부터 전날까지(2일 윈도우), post-event는 종료 다음날부터 3일 후까지(3일 윈도우). 이미 생성된 브리핑은 `UNIQUE(conference_name, conference_start, briefing_type)` 제약으로 중복 방지. 멱등성 유지.

@@ -17,8 +17,10 @@ conferences.yaml ──LLM──> conference_briefings
 ## raw_items — 수집 원본
 ```sql
 (source, source_id) UNIQUE  -- 멱등성 핵심
--- source: 'hackernews'|'arxiv'|'github'|'rss'|'youtube'
+-- source: 'hackernews'|'arxiv'|'github'|'rss'|'youtube'|'reddit'
 -- metadata: JSON (소스별 추가 필드: stars, comments, categories 등)
+--   reddit metadata: subreddit, score, num_comments, upvote_ratio, link_flair_text, external_url
+--   youtube metadata: channel_id, channel_name, thumbnail (채널 수집), search_query (검색 수집)
 -- content_snippet: 본문/초록 첫 500자
 ```
 
@@ -41,7 +43,7 @@ raw_item_id UNIQUE FK  -- 재스코어링 시 raw_items 보존
 ```sql
 (keyword, mention_date) UNIQUE
 -- total_count: 소스 통합 합계
--- source_breakdown: JSON {"hackernews": 5, "arxiv": 2}
+-- source_breakdown: JSON {"hackernews": 5, "arxiv": 2, "reddit": 3}
 ```
 트렌드 쿼리 최적화 목적. keyword_mentions에서 매일 집계.
 

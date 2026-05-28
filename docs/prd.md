@@ -21,15 +21,15 @@ NVIDIA의 2012년 ImageNet 우승 같은 거대한 투자 기회 신호를 포�
 ## 기능 범위
 
 ### 일일 파이프라인 (07:00 KST)
-수집(5개 소스) → 중복제거 → 키워드카운팅 → 트렌드감지(z-score) → LLM스코어링(0-100) → 다이제스트생성 → Discord전송
+수집(6개 소스) → 중복제거 → 키워드카운팅 → 트렌드감지(z-score) → LLM스코어링(0-100) → 다이제스트생성 → Discord전송
 
 ### 주간 파이프라인 (일요일 09:00)
 미추적 빈출 구문 추출 → LLM 키워드 제안 → Discord 전송, 대시보드에서 승인/거부
 
 ### 이벤트 파이프라인 (20:00)
 conferences.yaml 기반 자동 트리거:
-- **종료 1일 전**: Claude Sonnet으로 예상 발표 목록 생성 (pre_event)
-- **종료 1일 후**: 수집 데이터 대비 silent_signals 분석 (post_event)
+- **시작 2~1일 전**: Claude Sonnet으로 예상 발표 목록 생성 (pre_event)
+- **종료 1~3일 후**: 수집 데이터 대비 silent_signals 분석 (post_event)
 
 ### 대시보드 (Cloudflare Tunnel 외부 접속)
 Next.js 16, read-only SQLite, DB 변경 자동 새로고침. 5개 페이지:
@@ -46,8 +46,9 @@ Next.js 16, read-only SQLite, DB 변경 자동 새로고침. 5개 페이지:
 | Hacker News | Algolia Search | 2/s | front_page top30 + 키워드검색 |
 | arXiv | Atom XML | 0.1/s (10초) | company/infrastructure 카테고리 skip |
 | GitHub | Search API | 0.5/s | 인증 필수, trending 근사 |
-| RSS | feedparser | 2/s | 7개 피드 (TechCrunch, The Verge 등) |
-| YouTube | playlistItems | 1/s | search(100유닛) 대신 playlistItems(1유닛) |
+| RSS | feedparser | 2/s | 12개 피드 (TechCrunch, NVIDIA Blog, SemiAnalysis 등) |
+| YouTube | playlistItems + Search | 1/s | 12개 채널 playlistItems(1유닛) + 4개 검색 쿼리 search(100유닛) |
+| Reddit | JSON API | 1.5/s | 11개 서브레딧 (technology, MachineLearning, wallstreetbets 등) |
 
 ## 비기능 요구사항
 

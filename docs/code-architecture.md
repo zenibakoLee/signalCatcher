@@ -5,11 +5,12 @@
 ```
 signalCatcher/
 ├── config/              # YAML 설정 (keywords, sources, conferences, scoring_prompt)
+│   │                    # sources.yaml: RSS 12개, YouTube 12채널+4검색쿼리, Reddit 11서브레딧
 ├── pipeline/            # Python 백엔드
-│   ├── main.py          # Click CLI: daily|backfill|weekly|event|score-all|translate-titles
+│   ├── main.py          # Click CLI: daily|backfill|weekly|event|score-all|translate-titles (6 collectors)
 │   ├── db.py            # SQLite 연결, 스키마, 헬퍼
 │   ├── models.py        # Pydantic: RawItem, ScoredItem, TrendAlert
-│   ├── collectors/      # 소스별 수집기 (BaseCollector ABC)
+│   ├── collectors/      # 소스별 수집기 (BaseCollector ABC): HN, RSS, arXiv, GitHub, YouTube, Reddit
 │   ├── processing/      # dedup, keyword_counter, scorer, trend_detector
 │   ├── generators/      # daily_digest, conference_briefing, keyword_suggestions
 │   ├── delivery/        # discord_webhook (다이제스트, 트렌드, 브리핑, 에러)
@@ -27,7 +28,7 @@ signalCatcher/
 ## 파이프라인 흐름 (daily)
 
 ```
-CLI(click) → collect_all(asyncio, 5 collectors 순차)
+CLI(click) → collect_all(asyncio, 6 collectors 순차: HN→RSS→arXiv→GitHub→YouTube→Reddit)
            → deduplicate_and_store(INSERT OR IGNORE)
            → count_keywords_for_items(regex word-boundary)
            → detect_trends(z-score + 장기 가속)
@@ -41,7 +42,7 @@ CLI(click) → collect_all(asyncio, 5 collectors 순차)
 
 **수집기 격리**: 각 collector는 try/except로 감싸짐. 하나 실패해도 나머지 진행.
 
-**Rate Limiting**: 소스별 토큰 버킷 (`RateLimiter`). arXiv 0.1/s, HN 2/s, GitHub 0.5/s.
+**Rate Limiting**: 소스별 토큰 버킷 (`RateLimiter`). arXiv 0.1/s, HN 2/s, GitHub 0.5/s, YouTube 1/s, RSS 2/s, Reddit 1.5/s.
 
 **재시도**: `with_retry()` — 3회, 지수 백오프, 429는 15s×attempt. NON_RETRYABLE: {401,403,404,422}.
 

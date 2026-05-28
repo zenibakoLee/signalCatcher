@@ -35,10 +35,11 @@ def get_actionable_conferences(target_date: date | None = None) -> dict[str, lis
         end = date.fromisoformat(conf["end_date"])
         name = conf["name"]
 
-        pre_event_date = end - timedelta(days=1)
-        post_event_date = end + timedelta(days=1)
+        pre_window_start = start - timedelta(days=2)
+        post_window_start = end + timedelta(days=1)
+        post_window_end = end + timedelta(days=3)
 
-        if target_date == pre_event_date:
+        if pre_window_start <= target_date < start:
             existing = conn.execute(
                 "SELECT id FROM conference_briefings WHERE conference_name = ? AND conference_start = ? AND briefing_type = 'pre_event'",
                 (name, conf["start_date"]),
@@ -46,7 +47,7 @@ def get_actionable_conferences(target_date: date | None = None) -> dict[str, lis
             if not existing:
                 result["pre_event"].append(conf)
 
-        if target_date == post_event_date:
+        if post_window_start <= target_date <= post_window_end:
             existing = conn.execute(
                 "SELECT id FROM conference_briefings WHERE conference_name = ? AND conference_start = ? AND briefing_type = 'post_event'",
                 (name, conf["start_date"]),

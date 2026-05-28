@@ -37,6 +37,7 @@ async def _collect_all(keywords: list[str], since: datetime) -> tuple[list, list
     from pipeline.collectors.arxiv import ArxivCollector
     from pipeline.collectors.github import GitHubCollector
     from pipeline.collectors.youtube import YouTubeCollector
+    from pipeline.collectors.reddit import RedditCollector
     from pipeline.utils.rate_limiter import get_limiter
 
     sources_cfg = _load_sources_config()
@@ -72,6 +73,14 @@ async def _collect_all(keywords: list[str], since: datetime) -> tuple[list, list
             YouTubeCollector(
                 sources_cfg.get("youtube_channels", []),
                 get_limiter("youtube"),
+                search_queries=sources_cfg.get("youtube_search_queries", []),
+            ),
+        ),
+        (
+            "reddit",
+            RedditCollector(
+                sources_cfg.get("reddit_subreddits"),
+                get_limiter("reddit"),
             ),
         ),
     ]

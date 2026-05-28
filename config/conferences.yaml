@@ -6,6 +6,13 @@ conferences:
     search_terms: ["Google I/O", "Google IO 2026"]
     expected_topics: ["Gemini", "Android AI", "TPU"]
 
+  - name: "Computex 2026"
+    organizer: "TAITRA"
+    start_date: "2026-05-26"
+    end_date: "2026-05-29"
+    search_terms: ["Computex", "Computex 2026", "NVIDIA Computex"]
+    expected_topics: ["NVIDIA", "Jensen Huang", "GPU", "semiconductor", "AI hardware", "AMD", "Intel"]
+
   - name: "WWDC 2026"
     organizer: "Apple"
     start_date: "2026-06-08"
