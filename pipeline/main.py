@@ -125,6 +125,14 @@ def daily(hours: int):
         from pipeline.processing.keyword_counter import count_keywords_for_items
         count_keywords_for_items(new_ids)
 
+        # Step 4.5: Auto-manage keywords (promote/retire/suggest)
+        from pipeline.generators.keyword_suggestions import auto_manage_keywords
+        kw_result = auto_manage_keywords()
+        logger.info("Keyword management: %s", kw_result)
+        if kw_result.get("promoted") or kw_result.get("retired") or kw_result.get("auto_added"):
+            from pipeline.delivery.discord_webhook import deliver_keyword_management
+            deliver_keyword_management(kw_result)
+
         # Step 5: Detect trends (z-score acceleration)
         from pipeline.processing.trend_detector import detect_trends
         trend_alerts = detect_trends()

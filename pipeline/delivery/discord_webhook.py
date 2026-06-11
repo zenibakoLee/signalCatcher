@@ -12,6 +12,7 @@ logger = logging.getLogger(__name__)
 
 SAGE_GREEN = 0x5C7553
 EMBER_ORANGE = 0xD4623A
+LAVENDER = 0x7B68AE
 MAX_DESCRIPTION = 4096
 MAX_FIELD_VALUE = 1024
 MAX_TOTAL = 6000
@@ -196,7 +197,6 @@ def deliver_conference_briefing(data: dict, conf: dict, briefing_type: str) -> b
         return False
 
 
-LAVENDER = 0x7B68AE
 
 
 def deliver_keyword_suggestions(suggestions: list[dict]) -> bool:
@@ -297,4 +297,49 @@ def deliver_error_alert(pipeline_type: str, error_msg: str) -> bool:
             resp.raise_for_status()
         return True
     except Exception:
+        return False
+
+
+def deliver_keyword_management(result: dict) -> bool:
+    webhook_url = os.environ.get("DISCORD_WEBHOOK_URL")
+    if not webhook_url:
+        return False
+
+    promoted = result.get("promoted", 0)
+    retired = result.get("retired", 0)
+    auto_added = result.get("auto_added", 0)
+    suggested = result.get("suggested", 0)
+
+    if promoted == 0 and retired == 0 and auto_added == 0:
+        return False
+
+    lines = []
+    if promoted:
+        lines.append(f"**승격** {promoted}개 키워드 (suggested → active)")
+    if auto_added:
+        lines.append(f"**자동 추가** {auto_added}개 키워드 (고빈도 신규)")
+    if retired:
+        lines.append(f"**은퇴** {retired}개 키워드 (30일 무언급)")
+    if suggested:
+        lines.append(f"**제안** {suggested}개 후보 대기 중")
+
+    embed = {
+        "title": "🔄 키워드 자동 관리",
+        "description": "\n".join(lines),
+        "color": LAVENDER,
+        "footer": {"text": "시그널 캐처 | 매일 자동 실행"},
+    }
+
+    try:
+        with httpx.Client(timeout=30) as client:
+            resp = client.post(
+                webhook_url,
+                json={"embeds": [embed]},
+                headers={"Content-Type": "application/json"},
+            )
+            resp.raise_for_status()
+        logger.info("Discord: keyword management report delivered")
+        return True
+    except Exception:
+        logger.exception("Discord: failed to deliver keyword management report")
         return False

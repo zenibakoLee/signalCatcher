@@ -16,6 +16,104 @@ MODEL = "claude-haiku-4-5-20251001"
 MIN_FREQUENCY = 3
 TOP_CANDIDATES = 30
 
+PROMOTE_MIN_MENTIONS = 5
+PROMOTE_WINDOW_DAYS = 14
+RETIRE_ZERO_DAYS = 30
+
+
+def auto_manage_keywords(target_date: date | None = None) -> dict:
+    """Auto-promote suggestions and retire stale keywords. Called from daily pipeline."""
+    if target_date is None:
+        target_date = date.today()
+
+    conn = get_connection()
+    promoted = _promote_suggested(conn, target_date)
+    retired = _retire_stale(conn, target_date)
+    suggestions = suggest_keywords(target_date)
+    auto_added = _auto_activate_high_confidence(conn, suggestions)
+
+    result = {
+        "promoted": promoted,
+        "retired": retired,
+        "suggested": len(suggestions),
+        "auto_added": auto_added,
+    }
+    logger.info(
+        "Keyword management: promoted=%d, retired=%d, suggested=%d, auto_added=%d",
+        promoted, retired, len(suggestions), auto_added,
+    )
+    return result
+
+
+def _promote_suggested(conn, target_date: date) -> int:
+    since = (target_date - timedelta(days=PROMOTE_WINDOW_DAYS)).isoformat()
+    rows = conn.execute(
+        """SELECT k.keyword FROM keywords k
+           JOIN keyword_daily_aggregates a ON lower(k.keyword) = lower(a.keyword)
+           WHERE k.status = 'suggested' AND a.mention_date >= ?
+           GROUP BY k.keyword
+           HAVING SUM(a.total_count) >= ?""",
+        (since, PROMOTE_MIN_MENTIONS),
+    ).fetchall()
+
+    if not rows:
+        return 0
+
+    keywords = [r["keyword"] for r in rows]
+    conn.executemany(
+        "UPDATE keywords SET status = 'active', added_by = 'auto_promoted' WHERE keyword = ?",
+        [(kw,) for kw in keywords],
+    )
+    conn.commit()
+    logger.info("Auto-promoted keywords: %s", keywords)
+    return len(keywords)
+
+
+def _retire_stale(conn, target_date: date) -> int:
+    cutoff = (target_date - timedelta(days=RETIRE_ZERO_DAYS)).isoformat()
+    rows = conn.execute(
+        """SELECT k.keyword FROM keywords k
+           WHERE k.status = 'active' AND k.added_by != 'manual'
+           AND NOT EXISTS (
+               SELECT 1 FROM keyword_daily_aggregates a
+               WHERE lower(a.keyword) = lower(k.keyword) AND a.mention_date >= ?
+           )""",
+        (cutoff,),
+    ).fetchall()
+
+    if not rows:
+        return 0
+
+    keywords = [r["keyword"] for r in rows]
+    conn.executemany(
+        "UPDATE keywords SET status = 'retired' WHERE keyword = ?",
+        [(kw,) for kw in keywords],
+    )
+    conn.commit()
+    logger.info("Retired stale keywords: %s", keywords)
+    return len(keywords)
+
+
+def _auto_activate_high_confidence(conn, suggestions: list[dict]) -> int:
+    activated = []
+    for s in suggestions:
+        kw = s["keyword"]
+        row = conn.execute(
+            "SELECT SUM(total_count) as total FROM keyword_daily_aggregates WHERE lower(keyword) = lower(?)",
+            (kw,),
+        ).fetchone()
+        if row and row["total"] and row["total"] >= PROMOTE_MIN_MENTIONS:
+            conn.execute(
+                "UPDATE keywords SET status = 'active', added_by = 'auto_activated' WHERE keyword = ? AND status = 'suggested'",
+                (kw,),
+            )
+            activated.append(kw)
+
+    if activated:
+        conn.commit()
+        logger.info("Auto-activated high-confidence keywords: %s", activated)
+    return len(activated)
+
 
 def suggest_keywords(target_date: date | None = None) -> list[dict]:
     if target_date is None:
