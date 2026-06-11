@@ -291,6 +291,22 @@ CREATE TABLE IF NOT EXISTS keyword_cooccurrences (
 CREATE INDEX IF NOT EXISTS idx_cooccur_date ON keyword_cooccurrences(mention_date);
 CREATE INDEX IF NOT EXISTS idx_cooccur_pair ON keyword_cooccurrences(keyword_a, keyword_b);
 
+CREATE TABLE IF NOT EXISTS social_buzz (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    ticker          TEXT NOT NULL,
+    name            TEXT,
+    mentions        INTEGER NOT NULL,
+    upvotes         INTEGER NOT NULL DEFAULT 0,
+    rank            INTEGER,
+    rank_24h_ago    INTEGER,
+    mentions_24h_ago INTEGER,
+    source_filter   TEXT NOT NULL DEFAULT 'all-stocks',
+    collected_date  TEXT NOT NULL,
+    UNIQUE(ticker, source_filter, collected_date)
+);
+CREATE INDEX IF NOT EXISTS idx_buzz_ticker_date ON social_buzz(ticker, collected_date DESC);
+CREATE INDEX IF NOT EXISTS idx_buzz_date ON social_buzz(collected_date DESC);
+
 CREATE TABLE IF NOT EXISTS pipeline_runs (
     id              INTEGER PRIMARY KEY AUTOINCREMENT,
     run_type        TEXT NOT NULL,

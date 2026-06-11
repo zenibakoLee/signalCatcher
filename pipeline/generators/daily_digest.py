@@ -82,11 +82,21 @@ def generate_digest(target_date: date | None = None) -> dict | None:
             )
         trends_block = "\n\nTREND ALERTS:\n" + "\n".join(trend_lines)
 
+    buzz_block = ""
+    try:
+        from pipeline.collectors.apewisdom import get_ai_buzz_summary
+        buzz = get_ai_buzz_summary(target_date)
+        if buzz:
+            buzz_lines = [f'- {b["ticker"]}: {b["mentions"]}회 멘션, {b["upvotes"]} 업보트 (순위 #{b["rank"]})' for b in buzz[:10]]
+            buzz_block = "\n\nREDDIT SOCIAL BUZZ (AI 관련 종목):\n" + "\n".join(buzz_lines)
+    except Exception:
+        logger.debug("Social buzz data not available for digest")
+
     prompt = f"""당신은 매크로 투자자를 위한 기술 시그널 분석가입니다.
 모든 출력은 반드시 한국어로 작성하세요.
 
 아래는 {date_str} 기술 소스(HN, arXiv, GitHub, RSS, YouTube)에서 수집된 상위 항목입니다.
-투자 기회 관련도에 따라 이미 점수가 매겨져 있습니다.{trends_block}
+투자 기회 관련도에 따라 이미 점수가 매겨져 있습니다.{trends_block}{buzz_block}
 
 항목:
 {chr(10).join(items_block)}
@@ -99,6 +109,7 @@ def generate_digest(target_date: date | None = None) -> dict | None:
     {{"title": "항목 제목 (원문 유지)", "score": 85, "source": "HN", "url": "...", "commentary": "투자자에게 왜 중요한지 한 문장 설명 (한국어)"}}
   ],
   "trend_section": "트렌드 알림이 있으면 2-3문장으로 해석 (한국어). 없으면 빈 문자열.",
+  "social_buzz_note": "Reddit 소셜 버즈 데이터가 있으면 주목할 멘션 급등/급락 한 문장 (한국어). 없으면 빈 문자열.",
   "one_line_takeaway": "오늘의 가장 실행 가능한 인사이트 한 줄 (한국어). '주목할 필요가 있다' 같은 모호한 표현 대신 구체적 포지션/섹터/기업을 지목할 것."
 }}
 
@@ -165,6 +176,9 @@ def _format_markdown(data: dict) -> str:
 
     if data.get("trend_section"):
         parts.extend(["", "## 트렌드 알림", data["trend_section"]])
+
+    if data.get("social_buzz_note"):
+        parts.extend(["", "## 소셜 버즈", data["social_buzz_note"]])
 
     if data.get("one_line_takeaway"):
         parts.extend(["", f"**핵심 인사이트:** {data['one_line_takeaway']}"])

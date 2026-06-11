@@ -121,6 +121,11 @@ def daily(hours: int):
         all_items, errors = asyncio.run(_collect_all(keywords, since))
         new_ids = deduplicate_and_store(all_items)
 
+        # Step 3.5: Collect social buzz (apewisdom — independent of keyword search)
+        from pipeline.collectors.apewisdom import collect_social_buzz
+        buzz_count = asyncio.run(collect_social_buzz())
+        logger.info("Social buzz: %d tickers stored", buzz_count)
+
         # Step 4: Count keywords
         from pipeline.processing.keyword_counter import count_keywords_for_items
         count_keywords_for_items(new_ids)
