@@ -2,13 +2,20 @@ keywords:
   ai_model:
     - "GPT-5"
     - "Claude 4"
+    - "Claude Opus"
+    - "Claude Sonnet"
+    - "Claude Haiku"
+    - "Claude Code"
     - "Gemini Ultra"
+    - "Gemini Pro"
     - "Llama 4"
     - "Mistral Large"
     - "multimodal model"
     - "foundation model"
     - "small language model"
     - "reasoning model"
+    - "extended thinking"
+    - "computer use"
 
   hardware:
     - "NVIDIA"

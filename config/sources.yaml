@@ -37,6 +37,8 @@ rss_feeds:
     category: "research"
 
 youtube_channels:
+  - name: "Anthropic"
+    channel_id: "UCkSBprVFU8Xng3fySBSkrVg"
   - name: "NVIDIA"
     channel_id: "UCHuiy8bXnmK5nisYHUd1J5g"
   - name: "Google DeepMind"
@@ -67,6 +69,8 @@ youtube_search_queries:
   - "AI conference keynote"
   - "semiconductor earnings"
   - "AI infrastructure investment"
+  - "Claude model release"
+  - "Anthropic announcement"
 
 reddit_subreddits:
   - "technology"
@@ -80,6 +84,9 @@ reddit_subreddits:
   - "singularity"
   - "hardware"
   - "chipdesign"
+  - "ClaudeAI"
+  - "OpenAI"
+  - "LocalLLaMA"
 
 github_search:
   extra_queries:
@@ -87,6 +94,8 @@ github_search:
     - "topic:ai-agents stars:>50 pushed:>{yesterday}"
     - "topic:machine-learning stars:>500 pushed:>{yesterday}"
     - "topic:transformer stars:>100 pushed:>{yesterday}"
+    - "topic:claude stars:>30 pushed:>{yesterday}"
+    - "topic:anthropic stars:>30 pushed:>{yesterday}"
 
 arxiv_categories:
   - "cs.AI"
