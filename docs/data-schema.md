@@ -11,6 +11,7 @@ keyword_mentions ──agg──> keyword_daily_aggregates
 keyword_daily_aggregates ──z-score──> trend_alerts
 keyword_mentions ──pair count──> keyword_cooccurrences
 scored_items + trend_alerts ──LLM──> digests
+scored_items.related_tickers ──agg──> company_analyses (모멘텀 분석)
 conferences.yaml ──LLM──> conference_briefings
 ```
 
@@ -29,7 +30,9 @@ conferences.yaml ──LLM──> conference_briefings
 raw_item_id UNIQUE FK  -- 재스코어링 시 raw_items 보존
 -- score: 0-100, category: breakthrough|trend|product|research|infrastructure|policy
 -- title_ko: 한국어 번역 제목 (스코어링 시 자동 생성, translate-titles로 backfill)
+-- related_tickers: JSON 배열, 관련 종목 1~3개 (예: '["NVDA", "삼성전자"]'). 기업분석의 입력 데이터.
 -- 실패 시 fallback score=50
+-- YouTube search 결과는 25% 감점 적용
 ```
 
 ## keyword_mentions — 소스별 일별 키워드 매칭
@@ -82,12 +85,32 @@ digest_date UNIQUE
 ```sql
 keyword UNIQUE
 -- category: ai_model|hardware|framework|concept|company|infrastructure
--- status: active|suggested|rejected|retired
--- added_by: 'manual' | 'llm_suggestion'
+-- status: active|retired
+-- added_by: 'manual' | 'yaml_seed' | 'auto_discovery' | 'auto_promoted' | 'auto_activated' | 'spike_detection' | 'llm_suggestion'
+```
+매일 자동 관리: 신규 발견(auto_discovery), 스파이크 감지(spike_detection), 30일 무언급 은퇴.
+
+## company_analyses — 기업 모멘텀 분석
+```sql
+(ticker, generated_at) UNIQUE
+-- ticker: 종목 코드 (NVDA, 삼성전자 등)
+-- company_name: 회사명
+-- market: 'US' | 'KR'
+-- signal_count: 분석에 사용된 시그널 수
+-- signal_window_days: 시그널 수집 윈도우 (기본 30일)
+-- momentum_score: 0-100 (70+ = 강한 모멘텀)
+-- verdict: '강한 모멘텀' | '관심 관찰' | '모멘텀 약화' | '경고'
+-- verdict_summary: 2~3문장 요약
+-- five_questions: JSON, 5대 질문 프레임워크 진단 결과
+-- signal_timeline: JSON, 핵심 이벤트 타임라인
+-- risk_factors: JSON, 리스크 요인 목록
+-- key_signals_json: JSON, 근거 시그널 + 웹 기사 + fake_or_real 판단 + action_note
+-- model_used: 사용 LLM 모델 (claude-sonnet-4-6)
+-- delivered: 0|1, Discord 전송 여부
 ```
 
 ## pipeline_runs — 실행 감사 로그
 ```sql
--- run_type: daily|weekly|event_pre|event_post|backfill
+-- run_type: daily|event_pre|event_post|backfill
 -- status: running|completed|completed_with_errors|failed
 ```
