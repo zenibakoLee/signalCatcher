@@ -26,6 +26,8 @@ class ArxivCollector(BaseCollector):
         super().__init__(rate_limiter)
         self.categories = categories
 
+    BATCH_SIZE = 8
+
     async def collect(
         self,
         keywords: list[str],
@@ -42,27 +44,34 @@ class ArxivCollector(BaseCollector):
         items: list[RawItem] = []
         effective_since = since - timedelta(days=6)
 
+        batches = [
+            keywords[i : i + self.BATCH_SIZE]
+            for i in range(0, len(keywords), self.BATCH_SIZE)
+        ]
+        logger.info("arXiv: %d keywords → %d batched queries", len(keywords), len(batches))
+
         async with httpx.AsyncClient(timeout=60) as client:
-            for kw in keywords:
+            for batch in batches:
                 await self.rate_limiter.acquire()
                 try:
-                    kw_items = await self._search_keyword(client, kw, effective_since, seen_ids)
-                    items.extend(kw_items)
+                    batch_items = await self._search_batch(client, batch, effective_since, seen_ids)
+                    items.extend(batch_items)
                 except Exception:
-                    logger.exception("arXiv: failed to search keyword '%s'", kw)
+                    logger.exception("arXiv: failed batch %s", batch)
 
         logger.info("arXiv: collected %d items", len(items))
         return items
 
-    async def _search_keyword(
+    async def _search_batch(
         self,
         client: httpx.AsyncClient,
-        keyword: str,
+        keywords: list[str],
         since: datetime,
         seen: set[str],
     ) -> list[RawItem]:
         cat_query = "+OR+".join(f"cat:{c}" for c in self.categories)
-        search_query = f"all:{quote(keyword)}+AND+({cat_query})"
+        kw_query = "+OR+".join(f"all:{quote(kw)}" for kw in keywords)
+        search_query = f"({kw_query})+AND+({cat_query})"
 
         async def _do_request():
             r = await client.get(
@@ -71,7 +80,7 @@ class ArxivCollector(BaseCollector):
                     "search_query": search_query,
                     "sortBy": "submittedDate",
                     "sortOrder": "descending",
-                    "max_results": "20",
+                    "max_results": "50",
                 },
             )
             r.raise_for_status()

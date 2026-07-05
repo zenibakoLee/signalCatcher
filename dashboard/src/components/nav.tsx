@@ -7,6 +7,7 @@ const links = [
   { href: "/", label: "다이제스트" },
   { href: "/signals", label: "시그널" },
   { href: "/trends", label: "트렌드" },
+  { href: "/analyses", label: "분석" },
   { href: "/events", label: "컨퍼런스" },
   { href: "/settings", label: "설정" },
 ];

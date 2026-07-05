@@ -37,18 +37,19 @@ def init_db() -> None:
     DB_PATH.parent.mkdir(parents=True, exist_ok=True)
     conn = get_connection()
     conn.executescript(_SCHEMA)
-    _migrate_add_title_ko(conn)
+    _migrate_scored_items(conn)
     conn.commit()
 
 
-def _migrate_add_title_ko(conn: sqlite3.Connection) -> None:
-    """Add title_ko column to scored_items if it doesn't exist yet."""
+def _migrate_scored_items(conn: sqlite3.Connection) -> None:
     cols = {
         row[1]
         for row in conn.execute("PRAGMA table_info(scored_items)").fetchall()
     }
     if "title_ko" not in cols:
         conn.execute("ALTER TABLE scored_items ADD COLUMN title_ko TEXT")
+    if "related_tickers" not in cols:
+        conn.execute("ALTER TABLE scored_items ADD COLUMN related_tickers TEXT")
 
 
 def insert_raw_item(item: RawItem) -> int | None:
@@ -318,4 +319,27 @@ CREATE TABLE IF NOT EXISTS pipeline_runs (
     errors          TEXT,
     duration_secs   REAL
 );
+
+CREATE TABLE IF NOT EXISTS company_analyses (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    ticker          TEXT NOT NULL,
+    company_name    TEXT NOT NULL,
+    market          TEXT NOT NULL DEFAULT 'US',
+    signal_count    INTEGER NOT NULL DEFAULT 0,
+    signal_window_days INTEGER NOT NULL DEFAULT 30,
+    momentum_score  INTEGER NOT NULL CHECK(momentum_score BETWEEN 0 AND 100),
+    verdict         TEXT NOT NULL,
+    verdict_summary TEXT NOT NULL,
+    five_questions   TEXT NOT NULL,
+    signal_timeline TEXT NOT NULL,
+    risk_factors    TEXT NOT NULL,
+    key_signals_json TEXT NOT NULL,
+    model_used      TEXT NOT NULL,
+    generated_at    TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%S','now')),
+    delivered       INTEGER NOT NULL DEFAULT 0,
+    UNIQUE(ticker, generated_at)
+);
+CREATE INDEX IF NOT EXISTS idx_ca_ticker ON company_analyses(ticker);
+CREATE INDEX IF NOT EXISTS idx_ca_generated ON company_analyses(generated_at DESC);
+CREATE INDEX IF NOT EXISTS idx_ca_momentum ON company_analyses(momentum_score DESC);
 """

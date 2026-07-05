@@ -6,10 +6,8 @@
     <string>com.signalcatcher.daily</string>
     <key>ProgramArguments</key>
     <array>
-        <string>/Users/haejoonlee/dev/singalCatcher/.venv/bin/python</string>
-        <string>-m</string>
-        <string>pipeline</string>
-        <string>daily</string>
+        <string>/bin/bash</string>
+        <string>/Users/haejoonlee/dev/singalCatcher/scripts/run-daily.sh</string>
     </array>
     <key>WorkingDirectory</key>
     <string>/Users/haejoonlee/dev/singalCatcher</string>

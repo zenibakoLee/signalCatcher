@@ -11,7 +11,7 @@ from pipeline.db import get_connection
 logger = logging.getLogger(__name__)
 
 CONFIG_DIR = Path(__file__).resolve().parent.parent.parent / "config"
-BATCH_SIZE = 20
+BATCH_SIZE = 10
 MODEL = "claude-haiku-4-5-20251001"
 
 
@@ -37,7 +37,7 @@ def score_items(item_ids: list[int]) -> int:
         return 0
 
     rows = conn.execute(
-        f"""SELECT id, source, title, url, content_snippet
+        f"""SELECT id, source, title, url, content_snippet, metadata
             FROM raw_items WHERE id IN ({','.join('?' for _ in to_score)})""",
         to_score,
     ).fetchall()
@@ -62,14 +62,15 @@ def _score_batch(
 ) -> int:
     items_text = []
     for i, row in enumerate(batch, 1):
-        snippet = (row["content_snippet"] or "")[:300]
+        snippet = (row["content_snippet"] or "")[:2000]
         items_text.append(f'{i}. [{row["source"].upper()}] "{row["title"]}" — {snippet}')
 
     user_message = (
         "Score these items. Return ONLY a JSON array, no other text:\n\n"
         + "\n".join(items_text)
-        + '\n\nReturn: [{"index": 1, "score": 85, "reasoning": "...", "category": "...", "title_ko": "한국어 제목 번역"}, ...]'
-        + "\n\ntitle_ko: 각 항목의 제목을 자연스러운 한국어로 번역하세요. 고유명사(회사명, 제품명, 기술명)는 원어 그대로 유지하세요."
+        + '\n\nReturn: [{"index": 1, "score": 85, "reasoning": "...", "category": "...", "title_ko": "...", "related_tickers": ["NVDA", "삼성전자"]}, ...]'
+        + "\n\ntitle_ko: 기술 비전공자도 이해할 수 있게 번역하세요. 전문 용어 대신 쉬운 표현을 쓰세요. 고유명사(회사명, 제품명)는 원어 유지."
+        + "\n예: 'KV Cache Editability' → 'AI 모델 운영 비용을 줄이는 새 기술'"
     )
 
     try:
@@ -86,7 +87,7 @@ def _score_batch(
     except Exception:
         logger.exception("Scorer: LLM call failed for batch, using fallback scores")
         scores = [
-            {"index": i, "score": 50, "reasoning": "Auto-scored: LLM unavailable", "category": "trend", "title_ko": None}
+            {"index": i, "score": 50, "reasoning": "Auto-scored: LLM unavailable", "category": "trend", "title_ko": None, "related_tickers": []}
             for i in range(1, len(batch) + 1)
         ]
 
@@ -97,17 +98,22 @@ def _score_batch(
             continue
 
         row = batch[idx]
+        score = max(0, min(100, score_entry.get("score", 50)))
+        score = _apply_source_penalty(row, score)
+        tickers = score_entry.get("related_tickers") or []
+        tickers_json = json.dumps(tickers, ensure_ascii=False) if tickers else None
         try:
             conn.execute(
                 """INSERT OR IGNORE INTO scored_items
-                   (raw_item_id, score, score_reasoning, category, title_ko, model_used)
-                   VALUES (?, ?, ?, ?, ?, ?)""",
+                   (raw_item_id, score, score_reasoning, category, title_ko, related_tickers, model_used)
+                   VALUES (?, ?, ?, ?, ?, ?, ?)""",
                 (
                     row["id"],
-                    max(0, min(100, score_entry.get("score", 50))),
+                    score,
                     score_entry.get("reasoning", ""),
                     score_entry.get("category", "trend"),
                     score_entry.get("title_ko"),
+                    tickers_json,
                     MODEL,
                 ),
             )
@@ -117,6 +123,18 @@ def _score_batch(
 
     conn.commit()
     return count
+
+
+def _apply_source_penalty(row, score: int) -> int:
+    if row["source"] != "youtube":
+        return score
+    try:
+        meta = json.loads(row["metadata"] or "{}")
+    except (json.JSONDecodeError, TypeError):
+        return score
+    if meta.get("search_query"):
+        score = int(score * 0.75)
+    return score
 
 
 def _parse_scores(text: str) -> list[dict]:

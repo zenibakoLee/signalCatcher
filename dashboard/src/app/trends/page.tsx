@@ -2,6 +2,8 @@ import { getDb } from "@/lib/db";
 import { TrendChart } from "./chart";
 import { TimeRange } from "./time-range";
 import { NetworkGraph } from "./network";
+import { Sparkline } from "@/components/charts";
+import { ExpandableText } from "@/components/expandable-text";
 
 export const dynamic = "force-dynamic";
 
@@ -112,6 +114,17 @@ export default async function TrendsPage({
     // table may not exist yet
   }
 
+  // Sparkline data for top keywords
+  const kwSparklines: Record<string, number[]> = {};
+  for (const kw of topKeywords) {
+    const rows = db.prepare(`
+      SELECT total_count FROM keyword_daily_aggregates
+      WHERE keyword = ?${days === "all" ? "" : ` AND mention_date >= date('now', '-${days} days')`}
+      ORDER BY mention_date
+    `).all(kw.keyword) as { total_count: number }[];
+    kwSparklines[kw.keyword] = rows.map((r) => r.total_count);
+  }
+
   const rangeLabel = days === "all" ? "전체 기간" : `${days}일`;
 
   return (
@@ -157,7 +170,7 @@ export default async function TrendsPage({
                   <span className="font-bold">{a.keyword}</span>
                   <span className="text-sm text-warm-gray ml-2">{a.alert_date}</span>
                   {a.llm_interpretation && (
-                    <p className="text-sm text-warm-gray mt-1 line-clamp-1">{a.llm_interpretation}</p>
+                    <ExpandableText lines={1} className="text-sm text-warm-gray mt-1">{a.llm_interpretation}</ExpandableText>
                   )}
                 </div>
                 <span className={`px-2 py-0.5 rounded-full text-xs font-medium text-white ${
@@ -191,6 +204,7 @@ export default async function TrendsPage({
             <thead>
               <tr className="border-b border-light-gray bg-cream-dark/50">
                 <th className="text-left p-3 font-medium">키워드</th>
+                <th className="p-3 font-medium text-center">추이</th>
                 <th className="text-right p-3 font-medium">총 언급</th>
                 <th className="text-right p-3 font-medium">활동일</th>
                 <th className="text-right p-3 font-medium">최근</th>
@@ -200,6 +214,11 @@ export default async function TrendsPage({
               {topKeywords.map((kw) => (
                 <tr key={kw.keyword} className="border-b border-light-gray/50 hover:bg-cream-dark/30">
                   <td className="p-3 font-medium">{kw.keyword}</td>
+                  <td className="p-3 text-center">
+                    {kwSparklines[kw.keyword] && (
+                      <Sparkline data={kwSparklines[kw.keyword]} width={100} height={24} />
+                    )}
+                  </td>
                   <td className="p-3 text-right font-mono">{kw.total}</td>
                   <td className="p-3 text-right">{kw.active_days}일</td>
                   <td className="p-3 text-right text-warm-gray">{kw.last_seen}</td>

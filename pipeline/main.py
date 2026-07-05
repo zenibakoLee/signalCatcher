@@ -37,7 +37,6 @@ async def _collect_all(keywords: list[str], since: datetime) -> tuple[list, list
     from pipeline.collectors.arxiv import ArxivCollector
     from pipeline.collectors.github import GitHubCollector
     from pipeline.collectors.youtube import YouTubeCollector
-    from pipeline.collectors.reddit import RedditCollector
     from pipeline.utils.rate_limiter import get_limiter
 
     sources_cfg = _load_sources_config()
@@ -74,13 +73,6 @@ async def _collect_all(keywords: list[str], since: datetime) -> tuple[list, list
                 sources_cfg.get("youtube_channels", []),
                 get_limiter("youtube"),
                 search_queries=sources_cfg.get("youtube_search_queries", []),
-            ),
-        ),
-        (
-            "reddit",
-            RedditCollector(
-                sources_cfg.get("reddit_subreddits"),
-                get_limiter("reddit"),
             ),
         ),
     ]
@@ -126,15 +118,20 @@ def daily(hours: int):
         buzz_count = asyncio.run(collect_social_buzz())
         logger.info("Social buzz: %d tickers stored", buzz_count)
 
+        # Step 3.7: Enrich YouTube items with transcripts
+        from pipeline.processing.transcript import enrich_youtube_transcripts
+        yt_enriched = enrich_youtube_transcripts(new_ids)
+        logger.info("Transcript enrichment: %d items", yt_enriched)
+
         # Step 4: Count keywords
         from pipeline.processing.keyword_counter import count_keywords_for_items
         count_keywords_for_items(new_ids)
 
-        # Step 4.5: Auto-manage keywords (promote/retire/suggest)
+        # Step 4.5: Auto-manage keywords (discover/spike/retire)
         from pipeline.generators.keyword_suggestions import auto_manage_keywords
         kw_result = auto_manage_keywords()
         logger.info("Keyword management: %s", kw_result)
-        if kw_result.get("promoted") or kw_result.get("retired") or kw_result.get("auto_added"):
+        if kw_result.get("added") or kw_result.get("spiked") or kw_result.get("retired"):
             from pipeline.delivery.discord_webhook import deliver_keyword_management
             deliver_keyword_management(kw_result)
 
@@ -150,16 +147,36 @@ def daily(hours: int):
         from pipeline.generators.daily_digest import generate_digest
         digest_data = generate_digest()
 
+        # Step 7.5: Generate comic for digest
+        comic_path = None
+        if digest_data:
+            from pipeline.generators.comic import generate_digest_comic
+            from datetime import date
+            comic_path = generate_digest_comic(digest_data, date.today().isoformat())
+
         # Step 8: Deliver to Discord
         if digest_data:
             from pipeline.delivery.discord_webhook import deliver_digest
             from datetime import date
-            deliver_digest(digest_data, date.today().isoformat())
+            deliver_digest(digest_data, date.today().isoformat(), comic_path=comic_path)
 
         accel_alerts = [a for a in trend_alerts if a.severity == "accelerating"]
         if accel_alerts:
             from pipeline.delivery.discord_webhook import deliver_acceleration_alerts
             deliver_acceleration_alerts(accel_alerts)
+
+        # Step 9: Company momentum analysis
+        from pipeline.generators.company_analysis import run_company_analyses
+        analyses = run_company_analyses()
+        if analyses:
+            from pipeline.delivery.discord_webhook import deliver_company_analyses
+            deliver_company_analyses(analyses)
+            logger.info("Company analyses: %d reports generated", len(analyses))
+
+        if errors:
+            from pipeline.delivery.discord_webhook import deliver_collector_errors
+            from datetime import date
+            deliver_collector_errors(errors, date.today().isoformat())
 
         duration = time.time() - start
         status = "completed" if not errors else "completed_with_errors"
@@ -257,36 +274,6 @@ async def _collect_backfill(keywords: list[str], since: datetime) -> tuple[list,
     return all_items, errors
 
 
-@cli.command()
-def weekly():
-    """Run weekly keyword suggestion pipeline."""
-    from pipeline.generators.keyword_suggestions import suggest_keywords
-    from pipeline.delivery.discord_webhook import deliver_keyword_suggestions
-
-    start = time.time()
-    run_id = start_pipeline_run("weekly")
-
-    try:
-        suggestions = suggest_keywords()
-        if suggestions:
-            deliver_keyword_suggestions(suggestions)
-
-        duration = time.time() - start
-        complete_pipeline_run(
-            run_id,
-            status="completed",
-            items_collected=0,
-            items_scored=0,
-            duration_secs=round(duration, 2),
-        )
-        logger.info("Weekly pipeline completed: %d suggestions in %.1fs", len(suggestions), duration)
-    except Exception as e:
-        duration = time.time() - start
-        complete_pipeline_run(
-            run_id, status="failed", errors=[str(e)], duration_secs=round(duration, 2)
-        )
-        logger.exception("Weekly pipeline failed")
-        raise
 
 
 @cli.command()
@@ -419,6 +406,37 @@ def translate_titles(batch_limit: int):
             logger.exception("translate-titles: batch failed at offset %d", batch_start)
 
     logger.info("translate-titles: %d items translated", total)
+
+
+@cli.command("analyze")
+@click.option("--ticker", default=None, help="Specific ticker to analyze (skip auto-discovery)")
+@click.option("--window", default=30, help="Signal window in days")
+def analyze(ticker: str | None, window: int):
+    """Run company momentum analysis on top signal-accumulating tickers."""
+    from pipeline.generators.company_analysis import (
+        find_momentum_candidates,
+        generate_analysis,
+        run_company_analyses,
+    )
+
+    if ticker:
+        from pipeline.generators.company_analysis import WINDOW_DAYS
+        candidates = find_momentum_candidates(window_days=window, min_signals=1)
+        match = [c for c in candidates if c["ticker"] == ticker.upper()]
+        if not match:
+            logger.warning("analyze: ticker %s not found in recent signals", ticker)
+            return
+        data = generate_analysis(match[0])
+        if data:
+            logger.info("analyze: %s → %s (momentum=%d)", ticker, data.get("verdict"), data.get("momentum_score"))
+            from pipeline.delivery.discord_webhook import deliver_company_analyses
+            deliver_company_analyses([{"ticker": ticker.upper(), **data}])
+    else:
+        results = run_company_analyses()
+        if results:
+            from pipeline.delivery.discord_webhook import deliver_company_analyses
+            deliver_company_analyses(results)
+        logger.info("analyze: %d reports generated", len(results))
 
 
 if __name__ == "__main__":

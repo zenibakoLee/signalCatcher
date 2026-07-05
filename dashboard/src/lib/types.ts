@@ -10,6 +10,7 @@ export interface ScoredItem {
   content_snippet: string | null;
   published_at: string;
   metadata: string | null;
+  related_tickers: string | null;
 }
 
 export interface TrendAlert {
@@ -56,4 +57,22 @@ export interface Keyword {
   added_by: string;
   status: string;
   added_at: string;
+}
+
+export interface CompanyAnalysis {
+  id: number;
+  ticker: string;
+  company_name: string;
+  market: string;
+  signal_count: number;
+  signal_window_days: number;
+  momentum_score: number;
+  verdict: string;
+  verdict_summary: string;
+  five_questions: string;
+  signal_timeline: string;
+  risk_factors: string;
+  key_signals_json: string;
+  model_used: string;
+  generated_at: string;
 }

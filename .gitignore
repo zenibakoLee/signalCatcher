@@ -31,3 +31,6 @@ Thumbs.db
 
 # Logs (data/ 외부 생성 시)
 *.log
+
+# Claude Code
+.claude/

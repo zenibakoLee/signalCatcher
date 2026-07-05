@@ -92,7 +92,8 @@ def generate_digest(target_date: date | None = None) -> dict | None:
     except Exception:
         logger.debug("Social buzz data not available for digest")
 
-    prompt = f"""당신은 매크로 투자자를 위한 기술 시그널 분석가입니다.
+    prompt = f"""당신은 개인 투자자를 위한 기술 시그널 분석가입니다.
+대상 독자는 기술 비전공자인 개인 투자자입니다. 전문 용어를 쓰지 말고 쉽게 설명하세요.
 모든 출력은 반드시 한국어로 작성하세요.
 
 아래는 {date_str} 기술 소스(HN, arXiv, GitHub, RSS, YouTube)에서 수집된 상위 항목입니다.
@@ -103,14 +104,14 @@ def generate_digest(target_date: date | None = None) -> dict | None:
 
 아래 JSON 형식으로 다이제스트를 생성하세요:
 {{
-  "headline": "오늘 가장 투자 임팩트가 큰 단일 시그널을 구체적으로 지목하는 한 줄 (최대 80자, 한국어). 모든 것을 하나의 추상적 테마로 묶지 말 것. 예: 'Cerebras $5.5B IPO 성공 — AI 전용 칩 시장 본격 개화' 처럼 구체적 사건+의미 구조.",
-  "summary": "오늘 수집된 시그널 중 투자 판단에 직접 영향을 주는 2-3개를 각각 한 문장으로 설명 (한국어). 추상적 종합이 아니라 개별 시그널의 구체적 의미를 전달할 것.",
+  "headline": "오늘 가장 투자 임팩트가 큰 단일 시그널을 구체적으로 지목하는 한 줄 (최대 80자, 한국어). 기술 전문 용어 없이 누구나 이해할 수 있게. 예: 'Cerebras $5.5B IPO 성공 — AI 전용 칩 시장 본격 개화'",
+  "summary": "오늘 수집된 시그널 중 투자 판단에 직접 영향을 주는 2-3개를 각각 한 문장으로 설명 (한국어). 전문 용어 대신 '이 기술이 왜 돈이 되는지' 관점으로 쉽게 설명.",
   "top_items_commentary": [
-    {{"title": "항목 제목 (원문 유지)", "score": 85, "source": "HN", "url": "...", "commentary": "투자자에게 왜 중요한지 한 문장 설명 (한국어)"}}
+    {{"title": "항목 제목 (원문 유지)", "score": 85, "source": "HN", "url": "...", "commentary": "기술 비전공 투자자가 바로 이해할 수 있게 왜 중요한지 한 문장 설명 (한국어)", "related_tickers": ["NVDA", "삼성전자"]}}
   ],
-  "trend_section": "트렌드 알림이 있으면 2-3문장으로 해석 (한국어). 없으면 빈 문자열.",
+  "trend_section": "트렌드 알림이 있으면 2-3문장으로 쉽게 해석 (한국어). 없으면 빈 문자열.",
   "social_buzz_note": "Reddit 소셜 버즈 데이터가 있으면 주목할 멘션 급등/급락 한 문장 (한국어). 없으면 빈 문자열.",
-  "one_line_takeaway": "오늘의 가장 실행 가능한 인사이트 한 줄 (한국어). '주목할 필요가 있다' 같은 모호한 표현 대신 구체적 포지션/섹터/기업을 지목할 것."
+  "one_line_takeaway": "오늘의 핵심 인사이트 한 줄 (한국어). 구체적 종목/섹터를 지목하고, 왜 유망한지 한마디 덧붙일 것."
 }}
 
 유효한 JSON만 반환하세요."""

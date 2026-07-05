@@ -72,22 +72,6 @@ youtube_search_queries:
   - "Claude model release"
   - "Anthropic announcement"
 
-reddit_subreddits:
-  - "technology"
-  - "artificial"
-  - "MachineLearning"
-  - "nvidia"
-  - "semiconductors"
-  - "wallstreetbets"
-  - "investing"
-  - "stocks"
-  - "singularity"
-  - "hardware"
-  - "chipdesign"
-  - "ClaudeAI"
-  - "OpenAI"
-  - "LocalLLaMA"
-
 github_search:
   extra_queries:
     - "topic:llm stars:>100 pushed:>{yesterday}"

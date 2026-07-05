@@ -12,19 +12,26 @@ const categoryLabels: Record<string, string> = {
   infrastructure: "인프라",
 };
 
-const statusLabels: Record<string, { label: string; color: string }> = {
-  active: { label: "활성", color: "bg-sage text-white" },
-  suggested: { label: "제안됨", color: "bg-lavender text-white" },
-  rejected: { label: "거부", color: "bg-warm-gray text-white" },
-  retired: { label: "은퇴", color: "bg-light-gray text-charcoal" },
+const sourceLabels: Record<string, string> = {
+  manual: "수동",
+  yaml_seed: "초기 설정",
+  auto_discovery: "자동 발견",
+  auto_promoted: "자동 승격",
+  auto_activated: "자동 활성화",
+  spike_detection: "스파이크 감지",
+  llm_suggestion: "LLM 제안",
 };
 
 export default function SettingsPage() {
   const db = getDb();
 
   const keywords = db.prepare(
-    "SELECT * FROM keywords ORDER BY status, category, keyword"
+    "SELECT * FROM keywords WHERE status = 'active' ORDER BY category, keyword"
   ).all() as Keyword[];
+
+  const retiredCount = (db.prepare(
+    "SELECT COUNT(*) as cnt FROM keywords WHERE status = 'retired'"
+  ).get() as { cnt: number }).cnt;
 
   const byCategory: Record<string, Keyword[]> = {};
   for (const kw of keywords) {
@@ -33,11 +40,9 @@ export default function SettingsPage() {
     byCategory[cat].push(kw);
   }
 
-  const stats = {
-    total: keywords.length,
-    active: keywords.filter((k) => k.status === "active").length,
-    suggested: keywords.filter((k) => k.status === "suggested").length,
-  };
+  const autoCount = keywords.filter((k) =>
+    k.added_by !== "manual" && k.added_by !== "yaml_seed"
+  ).length;
 
   const runs = db.prepare(`
     SELECT run_type, started_at, status, items_collected, items_scored, duration_secs
@@ -56,39 +61,39 @@ export default function SettingsPage() {
       <section>
         <div className="grid grid-cols-3 gap-4">
           <div className="bg-white rounded-lg border border-light-gray p-4 text-center">
-            <p className="text-3xl font-bold text-sage">{stats.active}</p>
+            <p className="text-3xl font-bold text-sage">{keywords.length}</p>
             <p className="text-sm text-warm-gray">활성 키워드</p>
           </div>
           <div className="bg-white rounded-lg border border-light-gray p-4 text-center">
-            <p className="text-3xl font-bold text-lavender">{stats.suggested}</p>
-            <p className="text-sm text-warm-gray">제안된 키워드</p>
+            <p className="text-3xl font-bold text-lavender">{autoCount}</p>
+            <p className="text-sm text-warm-gray">자동 추가됨</p>
           </div>
           <div className="bg-white rounded-lg border border-light-gray p-4 text-center">
-            <p className="text-3xl font-bold text-charcoal">{stats.total}</p>
-            <p className="text-sm text-warm-gray">전체</p>
+            <p className="text-3xl font-bold text-warm-gray">{retiredCount}</p>
+            <p className="text-sm text-warm-gray">은퇴</p>
           </div>
         </div>
       </section>
 
       <section>
-        <h2 className="font-serif text-lg font-bold mb-3">키워드 관리</h2>
+        <h2 className="font-serif text-lg font-bold mb-3">활성 키워드</h2>
+        <p className="text-xs text-warm-gray mb-4">매일 자동으로 발견·추가·은퇴 관리됩니다</p>
         {Object.entries(byCategory).map(([cat, kws]) => (
           <div key={cat} className="mb-4">
             <h3 className="text-sm font-bold text-warm-gray mb-2">
               {categoryLabels[cat] || cat}
+              <span className="font-normal ml-1">({kws.length})</span>
             </h3>
             <div className="flex flex-wrap gap-2">
-              {kws.map((kw) => {
-                const st = statusLabels[kw.status] || statusLabels.active;
-                return (
-                  <span
-                    key={kw.id}
-                    className={`px-3 py-1 rounded-full text-xs font-medium ${st.color}`}
-                  >
-                    {kw.keyword}
-                  </span>
-                );
-              })}
+              {kws.map((kw) => (
+                <span
+                  key={kw.id}
+                  className="px-3 py-1 rounded-full text-xs font-medium bg-sage text-white"
+                  title={`추가: ${sourceLabels[kw.added_by] || kw.added_by}`}
+                >
+                  {kw.keyword}
+                </span>
+              ))}
             </div>
           </div>
         ))}

@@ -55,7 +55,7 @@ Next.js 16, read-only SQLite, DB 변경 자동 새로고침. 7개 페이지:
 | GitHub | Search API | 0.5/s | 인증 필수, trending 근사 |
 | RSS | feedparser | 2/s | 12개 피드 (TechCrunch, NVIDIA Blog, SemiAnalysis 등) |
 | YouTube | playlistItems + Search | 1/s | 12개 채널 playlistItems(1유닛) + 4개 검색 쿼리 search(100유닛) |
-| Reddit | JSON API | 1.5/s | 11개 서브레딧 (technology, MachineLearning, wallstreetbets 등) |
+| ~~Reddit~~ | ~~JSON API~~ | — | 2026-07 수집 중단 (비인증 API 차단). ApeWisdom 소셜 버즈로 대체 |
 
 ## 비기능 요구사항
 

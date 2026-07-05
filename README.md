@@ -6,15 +6,18 @@ NVIDIA의 2012년 ImageNet 우승 같은 거대한 투자 기회 신호를 포�
 
 ## 핵심 기능
 
-- **일일 파이프라인** — 6개 소스(HN, arXiv, GitHub, RSS, YouTube, Reddit) 수집 → LLM 스코어링(0-100) → 관련종목 매핑 → 다이제스트 → Discord 전송
-- **기업 모멘텀 분석** — 시그널 누적 종목을 자동 발견, Claude Sonnet으로 5대 질문 프레임워크 기반 모멘텀 레포트 생성 (Google News 보강)
+- **일일 파이프라인** — 5개 소스(HN, arXiv, GitHub, RSS, YouTube) 수집 → LLM 스코어링(0-100) → 관련종목 매핑 → 다이제스트 → Discord 전송 (+4컷만화 첨부)
+- **기업 모멘텀 분석** — 시그널 누적 종목을 자동 발견, Claude Sonnet으로 5대 질문 프레임워크 기반 모멘텀 레포트 생성 (Google News 보강 + 토스증권 실시간 시세/5거래일 등락률 컨텍스트)
+- **4컷만화 다이제스트** — Gemini 이미지 모델로 일일 다이제스트를 비전공자용 4컷만화로 변환하여 Discord 첨부
+- **소셜 버즈** — ApeWisdom 기반 Reddit 티커 멘션 집계 (일일 수집, 다이제스트 연동)
 - **트렌드 감지** — z-score 기반 키워드 가속도 감지 (notable >2.0, urgent >3.0)
 - **Silent Signals** — 컨퍼런스에서 예상했으나 미발표된 항목의 투자적 의미 분석
 - **자동 키워드 관리** — 매일 신규 키워드 자동 발견/활성화, 스파이크 감지, 30일 무언급 은퇴
 - **장기 가속 감지** — 4주 연속 상승 키워드 자동 탐지
 - **키워드 동시출현 네트워크** — 함께 언급되는 키워드 쌍의 관계 시각화
 - **YouTube 자막 보강** — yt-dlp로 YouTube 영상 자막을 추출하여 스코어링 정확도 향상
-- **대시보드** — Next.js 16, Cloudflare Tunnel 외부 접속, read-only SQLite, 자동 새로고침, 시각 차트
+- **수집기 상태 알림** — 개별 수집기 실패 시 Discord 부분 오류 알림 (파이프라인 크래시와 별도)
+- **대시보드** — Next.js 16, Cloudflare Tunnel 외부 접속, read-only SQLite, 자동 새로고침, 시각 차트 (다이제스트에 대시보드 링크 자동 포함)
 
 ## 요구사항
 
@@ -138,7 +141,7 @@ signalCatcher/
 | 파일 | 용도 |
 |------|------|
 | `config/keywords.yaml` | 추적 키워드 (카테고리별) |
-| `config/sources.yaml` | RSS URL, YouTube 채널/검색어, GitHub 쿼리, Reddit 서브레딧 |
+| `config/sources.yaml` | RSS URL, YouTube 채널/검색어, GitHub 쿼리, arXiv 카테고리 |
 | `config/conferences.yaml` | 컨퍼런스 일정 + 검색어 |
 | `config/scoring_prompt.txt` | Claude 스코어링 시스템 프롬프트 |
 
@@ -147,7 +150,8 @@ signalCatcher/
 | 계층 | 기술 |
 |------|------|
 | 수집/분석 | Python 3.12, asyncio, httpx, feedparser, yt-dlp (자막) |
-| LLM | Claude Haiku (스코어링/다이제스트/키워드), Sonnet (컨퍼런스/기업분석) |
+| 시세 | 토스증권 Open API (기업분석 실시간 가격 컨텍스트) |
+| LLM | Claude Haiku (스코어링/다이제스트/키워드), Sonnet (컨퍼런스/기업분석), Gemini (4컷만화) |
 | 저장 | SQLite WAL, 9개 테이블 |
 | 대시보드 | Next.js 16, Tailwind, better-sqlite3, SVG 차트 |
 | 전송 | Discord webhook (색상 코드 embed) |

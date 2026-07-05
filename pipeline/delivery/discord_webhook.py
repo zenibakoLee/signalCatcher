@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+from pathlib import Path
 
 import httpx
 
@@ -17,15 +18,24 @@ MAX_DESCRIPTION = 4096
 MAX_FIELD_VALUE = 1024
 MAX_TOTAL = 6000
 
+_URL_FILE = Path(__file__).resolve().parent.parent.parent / "data" / "logs" / "tunnel-url.txt"
 
-def deliver_digest(digest_data: dict, date_str: str) -> bool:
+
+def _dashboard_url() -> str:
+    try:
+        return _URL_FILE.read_text().strip()
+    except FileNotFoundError:
+        return ""
+
+
+def deliver_digest(digest_data: dict, date_str: str, comic_path: str | None = None) -> bool:
     webhook_url = os.environ.get("DISCORD_WEBHOOK_URL")
     if not webhook_url:
         logger.warning("Discord: DISCORD_WEBHOOK_URL not set, skipping delivery")
         return False
 
     embeds = _build_embeds(digest_data, date_str)
-    return _send_embeds(webhook_url, embeds, date_str)
+    return _send_embeds(webhook_url, embeds, date_str, comic_path=comic_path)
 
 
 def _build_embeds(data: dict, date_str: str) -> list[dict]:
@@ -36,6 +46,9 @@ def _build_embeds(data: dict, date_str: str) -> list[dict]:
     description = summary
     if takeaway:
         description += f"\n\n**핵심 인사이트:** {takeaway}"
+    dash = _dashboard_url()
+    if dash:
+        description += f"\n\n🔗 [대시보드 바로가기]({dash})"
     if len(description) > MAX_DESCRIPTION:
         description = description[: MAX_DESCRIPTION - 3] + "..."
 
@@ -50,7 +63,9 @@ def _build_embeds(data: dict, date_str: str) -> list[dict]:
         name = f"{'🔴' if isinstance(score, int) and score >= 90 else '🟡' if isinstance(score, int) and score >= 70 else '🟢'} [{score}] {source}"
 
         link = f"[{title}]({url})" if url else title
-        value = f"{link}\n{commentary}"
+        tickers = item.get("related_tickers") or []
+        ticker_str = f"\n📌 관련종목: {', '.join(tickers)}" if tickers else ""
+        value = f"{link}\n{commentary}{ticker_str}"
         if len(value) > MAX_FIELD_VALUE:
             value = value[: MAX_FIELD_VALUE - 3] + "..."
 
@@ -61,7 +76,7 @@ def _build_embeds(data: dict, date_str: str) -> list[dict]:
         "description": description,
         "color": SAGE_GREEN,
         "fields": fields,
-        "footer": {"text": f"시그널 캐처 | {date_str}"},
+        "footer": {"text": f"시그널 캐처 | {date_str} | 대시보드: {_dashboard_url()}"},
     }
 
     embeds = [main_embed]
@@ -78,7 +93,7 @@ def _build_embeds(data: dict, date_str: str) -> list[dict]:
     return embeds
 
 
-def _send_embeds(webhook_url: str, embeds: list[dict], date_str: str) -> bool:
+def _send_embeds(webhook_url: str, embeds: list[dict], date_str: str, comic_path: str | None = None) -> bool:
     total_chars = sum(
         len(e.get("title", ""))
         + len(e.get("description", ""))
@@ -93,11 +108,22 @@ def _send_embeds(webhook_url: str, embeds: list[dict], date_str: str) -> bool:
 
     try:
         with httpx.Client(timeout=30) as client:
-            resp = client.post(
-                webhook_url,
-                json={"embeds": embeds},
-                headers={"Content-Type": "application/json"},
-            )
+            if comic_path and os.path.exists(comic_path):
+                import mimetypes
+                name = os.path.basename(comic_path)
+                mime = mimetypes.guess_type(comic_path)[0] or "image/png"
+                with open(comic_path, "rb") as fh:
+                    resp = client.post(
+                        webhook_url,
+                        data={"payload_json": json.dumps({"embeds": embeds})},
+                        files={"file": (name, fh, mime)},
+                    )
+            else:
+                resp = client.post(
+                    webhook_url,
+                    json={"embeds": embeds},
+                    headers={"Content-Type": "application/json"},
+                )
             resp.raise_for_status()
 
         conn = get_connection()
@@ -171,7 +197,7 @@ def deliver_conference_briefing(data: dict, conf: dict, briefing_type: str) -> b
         "description": description,
         "color": DEEP_BLUE,
         "fields": fields,
-        "footer": {"text": f"시그널 캐처 | {conf['start_date']} ~ {conf['end_date']}"},
+        "footer": {"text": f"시그널 캐처 | {conf['start_date']} ~ {conf['end_date']} | 대시보드: {_dashboard_url()}"},
     }
 
     try:
@@ -199,41 +225,6 @@ def deliver_conference_briefing(data: dict, conf: dict, briefing_type: str) -> b
 
 
 
-def deliver_keyword_suggestions(suggestions: list[dict]) -> bool:
-    webhook_url = os.environ.get("DISCORD_WEBHOOK_URL")
-    if not webhook_url:
-        logger.warning("Discord: DISCORD_WEBHOOK_URL not set, skipping delivery")
-        return False
-
-    lines = []
-    for s in suggestions[:10]:
-        cat = s.get("category", "?")
-        lines.append(f"**{s['keyword']}** (`{cat}`)\n{s.get('reason', '')}")
-
-    description = "\n\n".join(lines)
-    if len(description) > MAX_DESCRIPTION:
-        description = description[: MAX_DESCRIPTION - 3] + "..."
-
-    embed = {
-        "title": "🔍 주간 키워드 제안",
-        "description": description,
-        "color": LAVENDER,
-        "footer": {"text": "시그널 캐처 | 대시보드 설정에서 승인/거부"},
-    }
-
-    try:
-        with httpx.Client(timeout=30) as client:
-            resp = client.post(
-                webhook_url,
-                json={"embeds": [embed]},
-                headers={"Content-Type": "application/json"},
-            )
-            resp.raise_for_status()
-        logger.info("Discord: keyword suggestions delivered (%d items)", len(suggestions))
-        return True
-    except Exception:
-        logger.exception("Discord: failed to deliver keyword suggestions")
-        return False
 
 
 def deliver_acceleration_alerts(alerts: list) -> bool:
@@ -257,7 +248,7 @@ def deliver_acceleration_alerts(alerts: list) -> bool:
         "title": "📊 장기 가속 감지",
         "description": description,
         "color": SAGE_GREEN,
-        "footer": {"text": "시그널 캐처 | 주간 이동평균 4주 연속 상승"},
+        "footer": {"text": f"시그널 캐처 | 주간 이동평균 4주 연속 상승 | 대시보드: {_dashboard_url()}"},
     }
 
     try:
@@ -275,6 +266,38 @@ def deliver_acceleration_alerts(alerts: list) -> bool:
         return False
 
 
+def deliver_collector_errors(errors: list[str], date_str: str) -> bool:
+    webhook_url = os.environ.get("DISCORD_WEBHOOK_URL")
+    if not webhook_url or not errors:
+        return False
+
+    lines = []
+    for err in errors[:10]:
+        source = err.split(":")[0] if ":" in err else "unknown"
+        lines.append(f"• **{source}** — {err}")
+
+    embed = {
+        "title": f"⚠️ 수집기 부분 오류 — {date_str}",
+        "description": "\n".join(lines),
+        "color": 0xFFA500,
+        "footer": {"text": f"시그널 캐처 | 파이프라인은 정상 완료됨 | 대시보드: {_dashboard_url()}"},
+    }
+
+    try:
+        with httpx.Client(timeout=30) as client:
+            resp = client.post(
+                webhook_url,
+                json={"embeds": [embed]},
+                headers={"Content-Type": "application/json"},
+            )
+            resp.raise_for_status()
+        logger.info("Discord: collector error alert delivered (%d errors)", len(errors))
+        return True
+    except Exception:
+        logger.exception("Discord: failed to deliver collector error alert")
+        return False
+
+
 def deliver_error_alert(pipeline_type: str, error_msg: str) -> bool:
     webhook_url = os.environ.get("DISCORD_WEBHOOK_URL")
     if not webhook_url:
@@ -284,7 +307,7 @@ def deliver_error_alert(pipeline_type: str, error_msg: str) -> bool:
         "title": f"⚠️ 파이프라인 오류: {pipeline_type}",
         "description": f"```\n{error_msg[:3000]}\n```",
         "color": 0xFF0000,
-        "footer": {"text": "시그널 캐처 | 로그 확인: data/logs/pipeline.log"},
+        "footer": {"text": f"시그널 캐처 | 로그 확인: data/logs/pipeline.log | 대시보드: {_dashboard_url()}"},
     }
 
     try:
@@ -300,34 +323,73 @@ def deliver_error_alert(pipeline_type: str, error_msg: str) -> bool:
         return False
 
 
+COPPER = 0xD0A661
+
+
+def deliver_company_analyses(analyses: list[dict]) -> bool:
+    webhook_url = os.environ.get("DISCORD_WEBHOOK_URL")
+    if not webhook_url or not analyses:
+        return False
+
+    lines = []
+    for a in analyses[:10]:
+        ticker = a.get("ticker", "?")
+        score = a.get("momentum_score", 0)
+        verdict = a.get("verdict", "?")
+        icon = "🔴" if score >= 70 else "🟡" if score >= 50 else "🟢"
+        action = a.get("action_note", "")
+        lines.append(f"{icon} **{ticker}** — {verdict} (모멘텀 {score}) · {action}")
+
+    embed = {
+        "title": f"📊 기업 모멘텀 분석 — {len(analyses)}건",
+        "description": "\n".join(lines),
+        "color": COPPER,
+        "footer": {"text": f"시그널 캐처 | 상세 → {_dashboard_url()}/analyses"},
+    }
+
+    try:
+        with httpx.Client(timeout=30) as client:
+            resp = client.post(
+                webhook_url,
+                json={"embeds": [embed]},
+                headers={"Content-Type": "application/json"},
+            )
+            resp.raise_for_status()
+        logger.info("Discord: company analyses summary delivered (%d)", len(analyses))
+        return True
+    except Exception:
+        logger.exception("Discord: failed to deliver company analyses")
+        return False
+
+
 def deliver_keyword_management(result: dict) -> bool:
     webhook_url = os.environ.get("DISCORD_WEBHOOK_URL")
     if not webhook_url:
         return False
 
-    promoted = result.get("promoted", 0)
-    retired = result.get("retired", 0)
-    auto_added = result.get("auto_added", 0)
-    suggested = result.get("suggested", 0)
+    added = result.get("added", [])
+    spiked = result.get("spiked", [])
+    retired = result.get("retired", [])
 
-    if promoted == 0 and retired == 0 and auto_added == 0:
+    if not added and not spiked and not retired:
         return False
 
     lines = []
-    if promoted:
-        lines.append(f"**승격** {promoted}개 키워드 (suggested → active)")
-    if auto_added:
-        lines.append(f"**자동 추가** {auto_added}개 키워드 (고빈도 신규)")
+    if added:
+        kw_list = ", ".join(f"**{a['keyword']}** (`{a.get('category', '?')}`)" for a in added[:8])
+        lines.append(f"➕ 신규 발견: {kw_list}")
+    if spiked:
+        kw_list = ", ".join(f"**{s['keyword']}** (오늘 {s['today_count']}회)" for s in spiked[:8])
+        lines.append(f"📈 스파이크 추가: {kw_list}")
     if retired:
-        lines.append(f"**은퇴** {retired}개 키워드 (30일 무언급)")
-    if suggested:
-        lines.append(f"**제안** {suggested}개 후보 대기 중")
+        kw_list = ", ".join(f"~~{kw}~~" for kw in retired[:8])
+        lines.append(f"🗑️ 은퇴: {kw_list}")
 
     embed = {
         "title": "🔄 키워드 자동 관리",
-        "description": "\n".join(lines),
+        "description": "\n\n".join(lines),
         "color": LAVENDER,
-        "footer": {"text": "시그널 캐처 | 매일 자동 실행"},
+        "footer": {"text": f"시그널 캐처 | 매일 자동 실행 | 대시보드: {_dashboard_url()}"},
     }
 
     try:
