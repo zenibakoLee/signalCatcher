@@ -30,25 +30,37 @@ def generate_digest_comic(digest_data: dict, date_str: str) -> str | None:
     summary = digest_data.get("summary", "")
     takeaway = digest_data.get("one_line_takeaway", "")
     items = digest_data.get("top_items_commentary", [])
-    items_text = "\n".join(
-        f"- {it.get('title', '')}: {it.get('commentary', '')}"
-        for it in items[:5]
+
+    # Explicit per-panel script — a free-form "4컷만화 그려줘" prompt lets the
+    # model improvise a 6-panel grid and duplicate content to fill it
+    item1 = items[0] if len(items) > 0 else {}
+    item2 = items[1] if len(items) > 1 else {}
+    panel3 = (
+        f"{item2.get('title', '')} — {item2.get('commentary', '')[:150]}"
+        if item2 else summary[:200]
     )
 
-    content = f"""[{date_str} 기술 투자 시그널 다이제스트]
+    prompt = f"""하나의 이미지를 생성해줘: 2x2 그리드로 나뉜 정사각형 4컷만화. 칸은 정확히 4개이며, 각 칸의 내용은 아래에 위치별로 지정되어 있다.
 
-헤드라인: {headline}
+스타일: 미소녀(분홍 머리)가 남학생에게 기술 투자 뉴스를 쉽게 설명해주는 학원물 만화. 비전공자 대학생 눈높이.
 
-요약: {summary}
+[왼쪽 위 칸 — 도입]
+미소녀가 오늘의 헤드라인을 소개: "{headline}"
 
-주요 항목:
-{items_text}
+[오른쪽 위 칸 — 첫 번째 시그널]
+{item1.get('title', '')} — {item1.get('commentary', '')[:150]}
 
-핵심 인사이트: {takeaway}"""
+[왼쪽 아래 칸 — 두 번째 시그널]
+{panel3}
 
-    prompt = f"""{content}
+[오른쪽 아래 칸 — 결론]
+핵심 인사이트 정리: "{takeaway}"
 
-해당 내용을 비전공자인 대학생이 이해할 수 있는 난이도로 미소녀가 설명해주는 4컷만화를 생성해줘. 말풍선 텍스트는 반드시 한국어로 작성해줘."""
+제약:
+- 이미지 전체는 반드시 2x2 = 4칸. 다섯 번째 칸을 만들지 마라.
+- 네 칸의 대사와 장면은 각각 위 지정 내용만 다루고, 칸끼리 중복 금지.
+- 말풍선은 자연스러운 한국어, 오탈자 금지.
+- 이미지 하단에 "{date_str} 기술 투자 시그널 다이제스트" 표기."""
 
     try:
         resp = client.models.generate_content(
