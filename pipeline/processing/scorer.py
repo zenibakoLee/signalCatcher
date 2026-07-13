@@ -54,6 +54,20 @@ def score_items(item_ids: list[int]) -> int:
     return scored_count
 
 
+def _format_buzz(metadata_json: str | None) -> str:
+    """Community engagement markers for the scoring prompt (buzz = 선행 신호)."""
+    try:
+        meta = json.loads(metadata_json or "{}")
+    except (json.JSONDecodeError, TypeError):
+        return ""
+    parts = []
+    if meta.get("points"):
+        parts.append(f"HN {meta['points']}pts/{meta.get('num_comments', 0)}cmt")
+    if meta.get("view_count"):
+        parts.append(f"조회수 {meta['view_count']:,}")
+    return f" ({', '.join(parts)})" if parts else ""
+
+
 def _score_batch(
     conn,
     client: anthropic.Anthropic,
@@ -63,7 +77,8 @@ def _score_batch(
     items_text = []
     for i, row in enumerate(batch, 1):
         snippet = (row["content_snippet"] or "")[:2000]
-        items_text.append(f'{i}. [{row["source"].upper()}] "{row["title"]}" — {snippet}')
+        buzz = _format_buzz(row["metadata"])
+        items_text.append(f'{i}. [{row["source"].upper()}]{buzz} "{row["title"]}" — {snippet}')
 
     user_message = (
         "Score these items. Return ONLY a JSON array, no other text:\n\n"

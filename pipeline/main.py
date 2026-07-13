@@ -73,6 +73,7 @@ async def _collect_all(keywords: list[str], since: datetime) -> tuple[list, list
                 sources_cfg.get("youtube_channels", []),
                 get_limiter("youtube"),
                 search_queries=sources_cfg.get("youtube_search_queries", []),
+                trending_queries=sources_cfg.get("youtube_trending_queries", []),
             ),
         ),
     ]

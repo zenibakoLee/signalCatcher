@@ -81,6 +81,13 @@ youtube_channels:
   - name: "Yannic Kilcher"
     channel_id: "UCZHmQk67mSJgfCCTn7xBfew"
 
+# 조회수 기반 동적 트렌딩 (지난 7일 최다 조회 롱폼 영상, 채널 무관)
+youtube_trending_queries:
+  - "AI researcher interview"
+  - "AGI OpenAI Anthropic"
+  - "AI datacenter infrastructure investment"
+  - "semiconductor AI chips"
+
 youtube_search_queries:
   - "NVIDIA Jensen Huang"
   - "AI conference keynote"
