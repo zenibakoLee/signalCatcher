@@ -14,6 +14,13 @@ logger = logging.getLogger(__name__)
 
 ALGOLIA_BASE = "https://hn.algolia.com/api/v1"
 
+# Viral catch-all: stories above this score are collected regardless of
+# keyword match. Seminal long-form documents (e.g. "Situational Awareness",
+# 81pts) often have titles that match no tracked keyword and leave the front
+# page before the daily fetch — the keyword pass and front-page pass both miss
+# them.
+VIRAL_POINTS_THRESHOLD = 80
+
 
 class HackerNewsCollector(BaseCollector):
     def __init__(self, rate_limiter: RateLimiter):
@@ -28,6 +35,9 @@ class HackerNewsCollector(BaseCollector):
             items.extend(
                 await self._fetch_front_page(client, seen_ids)
             )
+            items.extend(
+                await self._fetch_viral(client, since_ts, seen_ids)
+            )
 
             for kw in keywords:
                 await self.rate_limiter.acquire()
@@ -35,6 +45,29 @@ class HackerNewsCollector(BaseCollector):
                 items.extend(kw_items)
 
         logger.info("HackerNews: collected %d items", len(items))
+        return items
+
+    async def _fetch_viral(
+        self, client: httpx.AsyncClient, since_ts: int, seen: set[str]
+    ) -> list[RawItem]:
+        await self.rate_limiter.acquire()
+
+        async def _do_viral():
+            r = await client.get(
+                f"{ALGOLIA_BASE}/search_by_date",
+                params={
+                    "tags": "story",
+                    "numericFilters": f"created_at_i>{since_ts},points>={VIRAL_POINTS_THRESHOLD}",
+                    "hitsPerPage": 50,
+                },
+            )
+            r.raise_for_status()
+            return r
+
+        resp = await with_retry(_do_viral)
+        items = self._parse_hits(resp.json().get("hits", []), seen)
+        if items:
+            logger.info("HackerNews: %d viral stories (>=%d pts)", len(items), VIRAL_POINTS_THRESHOLD)
         return items
 
     async def _fetch_front_page(
