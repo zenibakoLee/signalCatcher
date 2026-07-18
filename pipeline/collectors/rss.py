@@ -36,7 +36,9 @@ class RSSCollector(BaseCollector):
     def _parse_feed(
         self, feed_cfg: dict, since_struct: time.struct_time
     ) -> list[RawItem]:
-        feed = feedparser.parse(feed_cfg["url"])
+        # 일부 피드(SEC EDGAR 등)는 식별 가능한 User-Agent를 요구한다
+        agent = feed_cfg.get("agent")
+        feed = feedparser.parse(feed_cfg["url"], agent=agent) if agent else feedparser.parse(feed_cfg["url"])
         items: list[RawItem] = []
 
         for entry in feed.entries:
@@ -51,6 +53,10 @@ class RSSCollector(BaseCollector):
             title = entry.get("title", "").strip()
             if not title:
                 continue
+            # EDGAR 공시 제목("8-K - Current report")에는 기업명이 없어 prefix로 보강
+            prefix = feed_cfg.get("title_prefix")
+            if prefix:
+                title = f"{prefix} {title}"
 
             link = entry.get("link", "")
             source_id = entry.get("id") or link or title
