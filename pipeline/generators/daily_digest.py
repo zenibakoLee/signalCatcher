@@ -23,6 +23,84 @@ def _kst_date_to_utc_range(d: date) -> tuple[str, str]:
     return utc_start.strftime("%Y-%m-%dT%H:%M:%S"), utc_end.strftime("%Y-%m-%dT%H:%M:%S")
 
 
+_CLUSTER_STOPWORDS = {
+    "the", "a", "an", "and", "or", "for", "with", "from", "how", "why", "what",
+    "show", "ask", "hn", "using", "your", "you", "new", "not", "are", "can",
+    "this", "that", "will", "just", "has", "have", "its", "into", "about",
+    "ai", "model", "models", "llm", "gpt", "video", "part",
+}
+
+
+def _detect_topic_clusters(conn, hours: int = 72, min_count: int = 8) -> list[dict]:
+    """단기간 다수 항목이 몰린 토픽 감지 — 개별 점수와 무관한 볼륨 신호.
+
+    개별 항목이 중간 점수여도(예: Kimi K3 출시 직후 개별 60~70점),
+    같은 토픽이 며칠 새 수십 건 수집되는 것 자체가 커뮤니티 파장의 직접 증거다.
+    제목의 토큰/바이그램 빈도로 클러스터를 찾아 다이제스트가 반드시 다루게 한다.
+    """
+    from collections import Counter
+    import re
+
+    def _grams_of(title: str) -> set[str]:
+        tokens = [t for t in re.findall(r"[A-Za-z0-9][A-Za-z0-9.\-]+", title.lower()) if t not in _CLUSTER_STOPWORDS]
+        grams = set(t for t in tokens if len(t) >= 3)
+        grams.update(f"{tokens[i]} {tokens[i+1]}" for i in range(len(tokens) - 1))
+        return grams
+
+    rows = conn.execute(
+        """SELECT r.title, s.score FROM raw_items r
+           LEFT JOIN scored_items s ON s.raw_item_id = r.id
+           WHERE r.collected_at >= datetime('now', ?)""",
+        (f"-{hours} hours",),
+    ).fetchall()
+    if not rows:
+        return []
+
+    gram_counts: Counter = Counter()
+    gram_titles: dict[str, list] = {}
+    for row in rows:
+        for g in _grams_of(row["title"] or ""):
+            gram_counts[g] += 1
+            gram_titles.setdefault(g, []).append((row["score"] or 0, row["title"]))
+
+    # baseline: 이전 14일 — "code", "claude" 같은 상시 배경 토픽을 걸러내고
+    # Kimi K3처럼 갑자기 등장한 급증 토픽만 남긴다
+    base_rows = conn.execute(
+        """SELECT title FROM raw_items
+           WHERE collected_at >= datetime('now', ?) AND collected_at < datetime('now', ?)""",
+        (f"-{hours + 14 * 24} hours", f"-{hours} hours"),
+    ).fetchall()
+    base_counts: Counter = Counter()
+    for row in base_rows:
+        for g in _grams_of(row["title"] or ""):
+            base_counts[g] += 1
+
+    clusters = []
+    used_grams: set[str] = set()
+    for gram, cnt in gram_counts.most_common(50):
+        if cnt < min_count:
+            break
+        # 기대치 = baseline 일평균 × 수집 시간 — 4배 이상 급증만 클러스터로 인정
+        expected = base_counts.get(gram, 0) / 14 * (hours / 24)
+        surge = cnt / max(expected, 1.0)
+        if surge < 4:
+            continue
+        if any(gram in u or u in gram for u in used_grams):
+            continue
+        used_grams.add(gram)
+        titles = sorted(gram_titles[gram], reverse=True)
+        clusters.append({
+            "topic": gram,
+            "count": cnt,
+            "surge_ratio": round(surge, 1),
+            "max_score": titles[0][0],
+            "sample_titles": [t for _, t in titles[:3]],
+        })
+        if len(clusters) >= 3:
+            break
+    return clusters
+
+
 def generate_digest(target_date: date | None = None) -> dict | None:
     if target_date is None:
         target_date = datetime.now(KST).date()
@@ -82,6 +160,25 @@ def generate_digest(target_date: date | None = None) -> dict | None:
             )
         trends_block = "\n\nTREND ALERTS:\n" + "\n".join(trend_lines)
 
+    cluster_block = ""
+    try:
+        clusters = _detect_topic_clusters(conn)
+        if clusters:
+            lines = []
+            for c in clusters:
+                lines.append(
+                    f'- "{c["topic"]}": 최근 72시간 {c["count"]}건 집중 수집, 평소 대비 {c.get("surge_ratio", "?")}배 급증 (개별 최고점 {c["max_score"]}) '
+                    f'— 예: {c["sample_titles"][0][:60]}'
+                )
+            cluster_block = (
+                "\n\n🔥 집중 화제 클러스터 (볼륨 신호 — 개별 점수와 무관하게 커뮤니티 파장의 직접 증거):\n"
+                + "\n".join(lines)
+                + "\n위 클러스터 토픽은 개별 항목 점수가 중간이어도 반드시 headline 또는 summary에서 다루고, "
+                "왜 이렇게 화제인지와 투자 함의를 설명하세요."
+            )
+    except Exception:
+        logger.exception("Cluster detection failed")
+
     buzz_block = ""
     try:
         from pipeline.collectors.apewisdom import get_ai_buzz_summary
@@ -97,7 +194,7 @@ def generate_digest(target_date: date | None = None) -> dict | None:
 모든 출력은 반드시 한국어로 작성하세요.
 
 아래는 {date_str} 기술 소스(HN, arXiv, GitHub, RSS, YouTube)에서 수집된 상위 항목입니다.
-투자 기회 관련도에 따라 이미 점수가 매겨져 있습니다.{trends_block}{buzz_block}
+투자 기회 관련도에 따라 이미 점수가 매겨져 있습니다.{trends_block}{cluster_block}{buzz_block}
 
 항목:
 {chr(10).join(items_block)}
