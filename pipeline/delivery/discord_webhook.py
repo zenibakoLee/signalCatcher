@@ -43,12 +43,14 @@ def _build_embeds(data: dict, date_str: str) -> list[dict]:
     summary = data.get("summary", "")
     takeaway = data.get("one_line_takeaway", "")
 
-    description = summary
+    dash = _dashboard_url()
+    header = ""
+    if dash:
+        header = f"🔗 [대시보드]({dash}) · [종목발굴]({dash}/theses) · [시그널]({dash}/signals)\n\n"
+
+    description = header + summary
     if takeaway:
         description += f"\n\n**핵심 인사이트:** {takeaway}"
-    dash = _dashboard_url()
-    if dash:
-        description += f"\n\n🔗 [대시보드 바로가기]({dash})"
     if len(description) > MAX_DESCRIPTION:
         description = description[: MAX_DESCRIPTION - 3] + "..."
 
