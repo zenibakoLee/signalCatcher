@@ -26,23 +26,76 @@ def auto_manage_keywords(target_date: date | None = None) -> dict:
         target_date = date.today()
 
     conn = get_connection()
+    resurged = _reactivate_resurgent(conn, target_date)
     retired = _retire_stale(conn, target_date)
     added = _discover_and_activate(conn, target_date)
     spiked = _detect_spike_keywords(conn, target_date)
 
-    reactivated = {a["keyword"].lower() for a in added} | {s["keyword"].lower() for s in spiked}
+    reactivated = {a["keyword"].lower() for a in added} | {s["keyword"].lower() for s in spiked} | {r.lower() for r in resurged}
     retired = [kw for kw in retired if kw.lower() not in reactivated]
 
     result = {
         "added": added,
         "spiked": spiked,
+        "resurged": resurged,
         "retired": retired,
     }
     logger.info(
-        "Keyword management: added=%d, spike_added=%d, retired=%d",
-        len(added), len(spiked), len(retired),
+        "Keyword management: added=%d, spike_added=%d, resurged=%d, retired=%d",
+        len(added), len(spiked), len(resurged), len(retired),
     )
     return result
+
+
+RESURGE_MIN_MENTIONS = 8  # 최근 7일 raw_items 제목에 이만큼 등장하면 은퇴 키워드 부활
+
+
+def _reactivate_resurgent(conn, target_date: date) -> list[str]:
+    """은퇴한 키워드가 최근 다시 화제가 되면 재활성화.
+
+    은퇴 키워드는 카운팅되지 않아 spike 감지로 부활할 수 없고, 신규 발굴 LLM은
+    '이미 아는 회사'라며 넘긴다. DeepSeek처럼 조용하다 재부상하는 케이스가
+    이 사각지대에 빠진다 (은퇴 후 investor meeting 인터뷰로 재점화). 은퇴
+    키워드를 최근 raw_items 제목에서 단어 경계로 카운트해 임계 이상이면 되살린다.
+    (부분일치는 'spark'→'DSpark' 같은 오탐을 낳으므로 단어 경계 매칭 필수)
+    """
+    since = (target_date - timedelta(days=DISCOVERY_WINDOW_DAYS)).isoformat()
+    until = (target_date + timedelta(days=1)).isoformat()
+
+    # 명명된 개체(회사·모델·하드웨어)만 대상 — framework/concept/infrastructure
+    # 같은 일반명사(Python, Knowledge, Data Center)는 상시 빈출이라 오탐을 낳는다.
+    ENTITY_CATEGORIES = ("company", "ai_model", "hardware", "breakthrough")
+    retired_kws = conn.execute(
+        f"SELECT keyword FROM keywords WHERE status = 'retired' AND category IN ({','.join('?' * len(ENTITY_CATEGORIES))})",
+        ENTITY_CATEGORIES,
+    ).fetchall()
+    if not retired_kws:
+        return []
+
+    rows = conn.execute(
+        "SELECT title FROM raw_items WHERE collected_at >= ? AND collected_at < ?",
+        (since, until),
+    ).fetchall()
+    titles = [(r["title"] or "").lower() for r in rows]
+
+    resurged = []
+    for kw_row in retired_kws:
+        kw = kw_row["keyword"]
+        # 3글자 미만은 오탐 위험이 커서 제외
+        if len(kw) < 3:
+            continue
+        pattern = re.compile(r"\b" + re.escape(kw.lower()) + r"\b")
+        mentions = sum(1 for t in titles if pattern.search(t))
+        if mentions >= RESURGE_MIN_MENTIONS:
+            conn.execute(
+                "UPDATE keywords SET status = 'active', added_by = 'resurgence' WHERE keyword = ?",
+                (kw,),
+            )
+            resurged.append(kw)
+            logger.info("Reactivated resurgent keyword '%s' (%d mentions in %dd)", kw, mentions, DISCOVERY_WINDOW_DAYS)
+    if resurged:
+        conn.commit()
+    return resurged
 
 
 def _discover_and_activate(conn, target_date: date) -> list[dict]:

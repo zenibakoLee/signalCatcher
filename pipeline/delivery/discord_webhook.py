@@ -369,9 +369,10 @@ def deliver_keyword_management(result: dict) -> bool:
 
     added = result.get("added", [])
     spiked = result.get("spiked", [])
+    resurged = result.get("resurged", [])
     retired = result.get("retired", [])
 
-    if not added and not spiked and not retired:
+    if not added and not spiked and not resurged and not retired:
         return False
 
     lines = []
@@ -381,6 +382,9 @@ def deliver_keyword_management(result: dict) -> bool:
     if spiked:
         kw_list = ", ".join(f"**{s['keyword']}** (오늘 {s['today_count']}회)" for s in spiked[:8])
         lines.append(f"📈 스파이크 추가: {kw_list}")
+    if resurged:
+        kw_list = ", ".join(f"**{kw}**" for kw in resurged[:8])
+        lines.append(f"♻️ 재부상 (은퇴 → 재활성): {kw_list}")
     if retired:
         kw_list = ", ".join(f"~~{kw}~~" for kw in retired[:8])
         lines.append(f"🗑️ 은퇴: {kw_list}")
