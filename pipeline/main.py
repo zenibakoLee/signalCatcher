@@ -37,6 +37,7 @@ async def _collect_all(keywords: list[str], since: datetime) -> tuple[list, list
     from pipeline.collectors.arxiv import ArxivCollector
     from pipeline.collectors.github import GitHubCollector
     from pipeline.collectors.youtube import YouTubeCollector
+    from pipeline.collectors.dcinside import DCInsideCollector
     from pipeline.utils.rate_limiter import get_limiter
 
     sources_cfg = _load_sources_config()
@@ -76,6 +77,7 @@ async def _collect_all(keywords: list[str], since: datetime) -> tuple[list, list
                 trending_queries=sources_cfg.get("youtube_trending_queries", []),
             ),
         ),
+        ("dcinside", DCInsideCollector(get_limiter("dcinside"))),
     ]
 
     for name, collector in collectors:
@@ -132,7 +134,7 @@ def daily(hours: int):
         from pipeline.generators.keyword_suggestions import auto_manage_keywords
         kw_result = auto_manage_keywords()
         logger.info("Keyword management: %s", kw_result)
-        if kw_result.get("added") or kw_result.get("spiked") or kw_result.get("retired"):
+        if kw_result.get("added") or kw_result.get("spiked") or kw_result.get("resurged") or kw_result.get("retired"):
             from pipeline.delivery.discord_webhook import deliver_keyword_management
             deliver_keyword_management(kw_result)
 

@@ -32,6 +32,7 @@ LIMITERS: dict[str, RateLimiter] = {
     "github": RateLimiter(0.5),
     "youtube": RateLimiter(1.0),
     "rss": RateLimiter(2.0),
+    "dcinside": RateLimiter(0.5),
 }
 
 

@@ -44,6 +44,9 @@ rss_feeds:
   - name: "Dwarkesh Podcast (blog)"
     url: "https://www.dwarkesh.com/feed"
     category: "analysis"
+  - name: "AI Proem (Grace Shao)"
+    url: "https://aiproem.substack.com/feed"
+    category: "analysis"
   # SEC EDGAR 8-K 공시 — 뉴스보다 빠른 원천 시그널 (그로쓰파파 툴킷 반영)
   - name: "SEC 8-K NVIDIA"
     url: "https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&CIK=0001045810&type=8-K&count=10&output=atom"
