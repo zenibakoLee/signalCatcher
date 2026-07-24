@@ -326,6 +326,61 @@ def deliver_error_alert(pipeline_type: str, error_msg: str) -> bool:
 COPPER = 0xD0A661
 
 
+def deliver_investment_theses(theses: list[dict]) -> bool:
+    webhook_url = os.environ.get("DISCORD_WEBHOOK_URL")
+    if not webhook_url or not theses:
+        return False
+
+    market_read = theses[0].get("market_read", "")
+    conv_icon = {"high": "🔥", "medium": "▪️", "low": "·"}
+    flag = {"US": "🇺🇸", "KR": "🇰🇷", "JP": "🇯🇵"}
+
+    def _fields(direction: str) -> list[dict]:
+        out = []
+        for t in [x for x in theses if x.get("direction") == direction][:6]:
+            tk = f" ({t['ticker']})" if t.get("ticker") else ""
+            name = f"{flag.get(t.get('market'), '')} {conv_icon.get(t.get('conviction'), '')} {t.get('company', '?')}{tk}"
+            body = f"**{t.get('bottleneck', '')}**\n{t.get('reasoning', '')}"
+            if t.get("falsifier"):
+                body += f"\n↩︎ 반증: {t['falsifier']}"
+            out.append({"name": name[:256], "value": body[:1024], "inline": False})
+        return out
+
+    embeds = []
+    buy_fields = _fields("buy")
+    avoid_fields = _fields("avoid")
+    if buy_fields:
+        embeds.append({
+            "title": "🎯 투자 대상 발굴 (매수)",
+            "description": market_read[:500],
+            "color": SAGE_GREEN,
+            "fields": buy_fields,
+            "footer": {"text": "시그널 캐처 | 2차적 추론 · 확신도 🔥high ▪️mid ·low"},
+        })
+    if avoid_fields:
+        embeds.append({
+            "title": "🛑 회피·청산 후보 (과도기 프리미엄 회귀)",
+            "color": EMBER_ORANGE,
+            "fields": avoid_fields,
+        })
+    if not embeds:
+        return False
+
+    try:
+        with httpx.Client(timeout=30) as client:
+            resp = client.post(
+                webhook_url,
+                json={"embeds": embeds},
+                headers={"Content-Type": "application/json"},
+            )
+            resp.raise_for_status()
+        logger.info("Discord: investment theses delivered (%d)", len(theses))
+        return True
+    except Exception:
+        logger.exception("Discord: failed to deliver investment theses")
+        return False
+
+
 def deliver_company_analyses(analyses: list[dict]) -> bool:
     webhook_url = os.environ.get("DISCORD_WEBHOOK_URL")
     if not webhook_url or not analyses:

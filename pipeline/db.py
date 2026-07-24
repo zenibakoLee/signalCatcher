@@ -342,4 +342,23 @@ CREATE TABLE IF NOT EXISTS company_analyses (
 CREATE INDEX IF NOT EXISTS idx_ca_ticker ON company_analyses(ticker);
 CREATE INDEX IF NOT EXISTS idx_ca_generated ON company_analyses(generated_at DESC);
 CREATE INDEX IF NOT EXISTS idx_ca_momentum ON company_analyses(momentum_score DESC);
+
+CREATE TABLE IF NOT EXISTS investment_theses (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    thesis_date     TEXT NOT NULL,
+    direction       TEXT NOT NULL,          -- 'buy' (발굴) | 'avoid' (회피/청산)
+    company         TEXT NOT NULL,
+    ticker          TEXT,
+    market          TEXT,                   -- US | KR | JP
+    bottleneck      TEXT,                   -- 핵심 병목/논거 한 줄
+    reasoning       TEXT NOT NULL,          -- 2차·3차적 추론 체인
+    conviction      TEXT,                   -- high | medium | low
+    falsifier       TEXT,                   -- 이 논리가 틀렸음을 알 수 있는 조건
+    driving_signals TEXT,                   -- 근거가 된 시그널 (JSON)
+    model_used      TEXT NOT NULL,
+    generated_at    TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%S','now')),
+    delivered       INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS idx_theses_date ON investment_theses(thesis_date DESC);
+CREATE INDEX IF NOT EXISTS idx_theses_direction ON investment_theses(direction);
 """

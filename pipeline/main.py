@@ -168,13 +168,13 @@ def daily(hours: int):
             from pipeline.delivery.discord_webhook import deliver_acceleration_alerts
             deliver_acceleration_alerts(accel_alerts)
 
-        # Step 9: Company momentum analysis
-        from pipeline.generators.company_analysis import run_company_analyses
-        analyses = run_company_analyses()
-        if analyses:
-            from pipeline.delivery.discord_webhook import deliver_company_analyses
-            deliver_company_analyses(analyses)
-            logger.info("Company analyses: %d reports generated", len(analyses))
+        # Step 9: 시그널 기반 투자 대상 발굴 (2차적 추론 — 매수 발굴 + 회피/청산)
+        from pipeline.generators.thesis_scout import run_thesis_scout
+        theses = run_thesis_scout()
+        if theses:
+            from pipeline.delivery.discord_webhook import deliver_investment_theses
+            deliver_investment_theses(theses)
+            logger.info("Thesis scout: %d theses generated", len(theses))
 
         if errors:
             from pipeline.delivery.discord_webhook import deliver_collector_errors
@@ -411,35 +411,16 @@ def translate_titles(batch_limit: int):
     logger.info("translate-titles: %d items translated", total)
 
 
-@cli.command("analyze")
-@click.option("--ticker", default=None, help="Specific ticker to analyze (skip auto-discovery)")
-@click.option("--window", default=30, help="Signal window in days")
-def analyze(ticker: str | None, window: int):
-    """Run company momentum analysis on top signal-accumulating tickers."""
-    from pipeline.generators.company_analysis import (
-        find_momentum_candidates,
-        generate_analysis,
-        run_company_analyses,
-    )
-
-    if ticker:
-        from pipeline.generators.company_analysis import WINDOW_DAYS
-        candidates = find_momentum_candidates(window_days=window, min_signals=1)
-        match = [c for c in candidates if c["ticker"] == ticker.upper()]
-        if not match:
-            logger.warning("analyze: ticker %s not found in recent signals", ticker)
-            return
-        data = generate_analysis(match[0])
-        if data:
-            logger.info("analyze: %s → %s (momentum=%d)", ticker, data.get("verdict"), data.get("momentum_score"))
-            from pipeline.delivery.discord_webhook import deliver_company_analyses
-            deliver_company_analyses([{"ticker": ticker.upper(), **data}])
-    else:
-        results = run_company_analyses()
-        if results:
-            from pipeline.delivery.discord_webhook import deliver_company_analyses
-            deliver_company_analyses(results)
-        logger.info("analyze: %d reports generated", len(results))
+@cli.command("scout")
+@click.option("--days", default=7, help="Signal lookback window in days")
+def scout(days: int):
+    """Generate investment theses from the strongest recent signals (buy discovery + avoid/exit)."""
+    from pipeline.generators.thesis_scout import run_thesis_scout
+    theses = run_thesis_scout(window_days=days)
+    if theses:
+        from pipeline.delivery.discord_webhook import deliver_investment_theses
+        deliver_investment_theses(theses)
+    logger.info("scout: %d theses generated", len(theses))
 
 
 if __name__ == "__main__":
