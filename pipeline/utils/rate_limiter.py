@@ -33,6 +33,7 @@ LIMITERS: dict[str, RateLimiter] = {
     "youtube": RateLimiter(1.0),
     "rss": RateLimiter(2.0),
     "dcinside": RateLimiter(0.5),
+    "trendshift": RateLimiter(3.0),
 }
 
 

@@ -38,6 +38,7 @@ async def _collect_all(keywords: list[str], since: datetime) -> tuple[list, list
     from pipeline.collectors.github import GitHubCollector
     from pipeline.collectors.youtube import YouTubeCollector
     from pipeline.collectors.dcinside import DCInsideCollector
+    from pipeline.collectors.trendshift import TrendshiftCollector
     from pipeline.utils.rate_limiter import get_limiter
 
     sources_cfg = _load_sources_config()
@@ -78,6 +79,7 @@ async def _collect_all(keywords: list[str], since: datetime) -> tuple[list, list
             ),
         ),
         ("dcinside", DCInsideCollector(get_limiter("dcinside"))),
+        ("trendshift", TrendshiftCollector(get_limiter("trendshift"))),
     ]
 
     for name, collector in collectors:
