@@ -38,6 +38,7 @@ def init_db() -> None:
     conn = get_connection()
     conn.executescript(_SCHEMA)
     _migrate_scored_items(conn)
+    _migrate_theses(conn)
     conn.commit()
 
 
@@ -50,6 +51,19 @@ def _migrate_scored_items(conn: sqlite3.Connection) -> None:
         conn.execute("ALTER TABLE scored_items ADD COLUMN title_ko TEXT")
     if "related_tickers" not in cols:
         conn.execute("ALTER TABLE scored_items ADD COLUMN related_tickers TEXT")
+
+
+def _migrate_theses(conn: sqlite3.Connection) -> None:
+    cols = {
+        row[1]
+        for row in conn.execute("PRAGMA table_info(investment_theses)").fetchall()
+    }
+    if not cols:  # 테이블 미생성 (구버전) — 스키마가 생성함
+        return
+    if "depth_layer" not in cols:
+        conn.execute("ALTER TABLE investment_theses ADD COLUMN depth_layer INTEGER")
+    if "pricing_status" not in cols:
+        conn.execute("ALTER TABLE investment_theses ADD COLUMN pricing_status TEXT")
 
 
 def insert_raw_item(item: RawItem) -> int | None:
@@ -352,6 +366,8 @@ CREATE TABLE IF NOT EXISTS investment_theses (
     market          TEXT,                   -- US | KR | JP
     bottleneck      TEXT,                   -- 핵심 병목/논거 한 줄
     reasoning       TEXT NOT NULL,          -- 2차·3차적 추론 체인
+    depth_layer     INTEGER,                -- 병목 깊이 1(최심·대체불가) ~ 3(표층·진입쉬움)
+    pricing_status  TEXT,                   -- 가격 반영 정도: unpriced|partial|mostly|overpriced
     conviction      TEXT,                   -- high | medium | low
     falsifier       TEXT,                   -- 이 논리가 틀렸음을 알 수 있는 조건
     driving_signals TEXT,                   -- 근거가 된 시그널 (JSON)

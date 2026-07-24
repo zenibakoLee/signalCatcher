@@ -334,37 +334,57 @@ def deliver_investment_theses(theses: list[dict]) -> bool:
     market_read = theses[0].get("market_read", "")
     conv_icon = {"high": "🔥", "medium": "▪️", "low": "·"}
     flag = {"US": "🇺🇸", "KR": "🇰🇷", "JP": "🇯🇵"}
+    pricing_label = {
+        "unpriced": "🟢 미반영", "partial": "🟡 부분반영",
+        "mostly": "🟠 상당반영", "overpriced": "🔴 과열",
+    }
 
-    def _fields(direction: str) -> list[dict]:
-        out = []
-        for t in [x for x in theses if x.get("direction") == direction][:6]:
-            tk = f" ({t['ticker']})" if t.get("ticker") else ""
-            name = f"{flag.get(t.get('market'), '')} {conv_icon.get(t.get('conviction'), '')} {t.get('company', '?')}{tk}"
-            body = f"**{t.get('bottleneck', '')}**\n{t.get('reasoning', '')}"
-            if t.get("falsifier"):
-                body += f"\n↩︎ 반증: {t['falsifier']}"
-            out.append({"name": name[:256], "value": body[:1024], "inline": False})
-        return out
+    def _field(t: dict) -> dict:
+        tk = f" ({t['ticker']})" if t.get("ticker") else ""
+        price = pricing_label.get(t.get("pricing_status"), "")
+        name = f"{flag.get(t.get('market'), '')} {conv_icon.get(t.get('conviction'), '')} {t.get('company', '?')}{tk}  {price}"
+        body = f"**{t.get('bottleneck', '')}**\n{t.get('reasoning', '')}"
+        if t.get("falsifier"):
+            body += f"\n↩︎ 반증: {t['falsifier']}"
+        return {"name": name[:256], "value": body[:1024], "inline": False}
 
     embeds = []
-    buy_fields = _fields("buy")
-    avoid_fields = _fields("avoid")
-    if buy_fields:
+    buys = [x for x in theses if x.get("direction") == "buy"]
+    # 병목 깊이 층별 정리 (1층=최심 대체불가 → 3층=표층 진입쉬움)
+    LAYER_TITLES = {
+        1: "🥇 1층 — 최심부 병목 (대체 거의 불가능, 다년 리드타임·과점)",
+        2: "🥈 2층 — 중간 병목 (유의미한 해자, 시간이 지나면 경쟁 위험)",
+        3: "🥉 3층 — 표층 (지금 수혜, 진입장벽 낮아 상품화 위험)",
+    }
+    if buys:
         embeds.append({
-            "title": "🎯 투자 대상 발굴 (매수)",
-            "description": market_read[:500],
+            "title": "🎯 투자 대상 발굴 (매수) — 병목 깊이순",
+            "description": (market_read[:480] + "\n\n가격반영: 🟢미반영 🟡부분 🟠상당 🔴과열 · 확신도 🔥high ▪️mid ·low"),
             "color": SAGE_GREEN,
-            "fields": buy_fields,
-            "footer": {"text": "시그널 캐처 | 2차적 추론 · 확신도 🔥high ▪️mid ·low"},
         })
-    if avoid_fields:
+        for layer in (1, 2, 3):
+            layer_buys = [t for t in buys if t.get("depth_layer") == layer][:5]
+            if layer_buys:
+                embeds.append({
+                    "title": LAYER_TITLES[layer],
+                    "color": SAGE_GREEN,
+                    "fields": [_field(t) for t in layer_buys],
+                })
+        # depth_layer 누락분 (혹시라도)
+        no_layer = [t for t in buys if t.get("depth_layer") not in (1, 2, 3)][:5]
+        if no_layer:
+            embeds.append({"title": "🎯 매수 (미분류)", "color": SAGE_GREEN, "fields": [_field(t) for t in no_layer]})
+
+    avoid = [x for x in theses if x.get("direction") == "avoid"][:6]
+    if avoid:
         embeds.append({
             "title": "🛑 회피·청산 후보 (과도기 프리미엄 회귀)",
             "color": EMBER_ORANGE,
-            "fields": avoid_fields,
+            "fields": [_field(t) for t in avoid],
         })
     if not embeds:
         return False
+    embeds = embeds[:10]  # Discord 임베드 한계
 
     try:
         with httpx.Client(timeout=30) as client:

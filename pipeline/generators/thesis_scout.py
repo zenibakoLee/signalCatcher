@@ -68,6 +68,21 @@ SCOUT_SYSTEM = """당신은 2차적(second-order) 사고에 능한 투자 발굴
    시그널에서 논리적으로 도출되지 않는 상상은 금지.
 6. 각 논지에 반증 조건(falsifier)을 명시 — 이 논리가 틀렸음을 무엇으로 알 수 있는가.
 
+**병목 깊이(depth_layer) — 매수 발굴에 필수. 대체 불가능성 기준 3개 층으로 분류:**
+- 1층 (최심부): 다년 리드타임 + 과점/독점 + 물리적·규제적 해자. 신규 경쟁 진입이 사실상
+  불가능 (예: 초고압 변압기 과점, EUV 노광, 특정 규제 자산). 사이클이 길어질수록 백로그 누적.
+- 2층 (중간부): 유의미한 해자가 있으나 시간이 지나면 경쟁·대체 위험이 존재. 설계 승인·전환
+  비용이 진입장벽이지만 절대적이지 않음.
+- 3층 (표층): 지금 수혜를 받지만 진입장벽이 낮아 경쟁이 붙기 쉽고 결국 상품화(마진 하락).
+위로 갈수록(1층) 대체 불가능, 아래로 갈수록(3층) 경쟁 진입 용이. 각 매수 항목에 1~3 부여.
+
+**가격 반영 정도(pricing_status) — 모든 항목 필수. 논지가 이미 주가에 얼마나 반영됐는가:**
+- unpriced: 시장이 아직 이 연결고리를 인식 못 함 (비대칭 기회 최대)
+- partial: 일부 반영됐으나 여전히 상승 여지
+- mostly: 상당 부분 반영 (컨센서스에 근접)
+- overpriced: 과도하게 선반영 (회피 대상은 대부분 여기)
+가장 가치 있는 매수는 '1층 병목 + unpriced/partial'의 조합이다.
+
 품질 기준: 명백한 이름(엔비디아·TSMC·삼성전자 그 자체)을 1차적으로 나열하지 말 것.
 그 이면의 덜 알려진, 그러나 논리적으로 필연적인 대상을 우선한다. 확신이 약하면 적게
 내되, 매 항목이 '왜 지금 이게 비대칭적 기회인가'에 답해야 한다."""
@@ -90,11 +105,13 @@ SCOUT_TOOL = {
                         "market": {"type": "string", "enum": ["US", "KR", "JP"]},
                         "bottleneck": {"type": "string", "description": "핵심 병목/논거 한 줄 (한국어)"},
                         "reasoning": {"type": "string", "description": "2차·3차 추론 체인. A→B→C 연결을 명시 (한국어, 3-5문장)"},
+                        "depth_layer": {"type": "integer", "enum": [1, 2, 3], "description": "병목 깊이. 1=최심(대체불가), 2=중간, 3=표층(진입쉬움). 매수 발굴 필수, 회피는 생략 가능"},
+                        "pricing_status": {"type": "string", "enum": ["unpriced", "partial", "mostly", "overpriced"], "description": "주가 반영 정도"},
                         "conviction": {"type": "string", "enum": ["high", "medium", "low"]},
                         "falsifier": {"type": "string", "description": "이 논리가 틀렸음을 알 수 있는 조건 (한국어)"},
                         "driving_signals": {"type": "array", "items": {"type": "string"}, "description": "근거가 된 시그널 제목/요지 1-3개"},
                     },
-                    "required": ["direction", "company", "market", "bottleneck", "reasoning", "conviction", "falsifier", "driving_signals"],
+                    "required": ["direction", "company", "market", "bottleneck", "reasoning", "pricing_status", "conviction", "falsifier", "driving_signals"],
                 },
             },
         },
@@ -157,12 +174,13 @@ def run_thesis_scout(window_days: int = 7) -> list[dict]:
         conn.execute(
             """INSERT INTO investment_theses
                (thesis_date, direction, company, ticker, market, bottleneck, reasoning,
-                conviction, falsifier, driving_signals, model_used)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                depth_layer, pricing_status, conviction, falsifier, driving_signals, model_used)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (
                 thesis_date, t.get("direction", "buy"), t.get("company", ""),
                 t.get("ticker", ""), t.get("market", ""), t.get("bottleneck", ""),
-                t.get("reasoning", ""), t.get("conviction", "medium"),
+                t.get("reasoning", ""), t.get("depth_layer"), t.get("pricing_status", ""),
+                t.get("conviction", "medium"),
                 t.get("falsifier", ""), json.dumps(t.get("driving_signals", []), ensure_ascii=False),
                 MODEL,
             ),
