@@ -39,6 +39,9 @@ async def _collect_all(keywords: list[str], since: datetime) -> tuple[list, list
     from pipeline.collectors.youtube import YouTubeCollector
     from pipeline.collectors.dcinside import DCInsideCollector
     from pipeline.collectors.trendshift import TrendshiftCollector
+    from pipeline.collectors.sec_form4 import SECForm4Collector
+    from pipeline.collectors.polymarket import PolymarketCollector
+    from pipeline.collectors.openrouter import OpenRouterCollector
     from pipeline.utils.rate_limiter import get_limiter
 
     sources_cfg = _load_sources_config()
@@ -80,6 +83,9 @@ async def _collect_all(keywords: list[str], since: datetime) -> tuple[list, list
         ),
         ("dcinside", DCInsideCollector(get_limiter("dcinside"))),
         ("trendshift", TrendshiftCollector(get_limiter("trendshift"))),
+        ("sec_form4", SECForm4Collector(get_limiter("sec_form4"))),
+        ("polymarket", PolymarketCollector(get_limiter("polymarket"))),
+        ("openrouter", OpenRouterCollector(get_limiter("openrouter"))),
     ]
 
     for name, collector in collectors:

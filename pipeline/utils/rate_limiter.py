@@ -34,6 +34,9 @@ LIMITERS: dict[str, RateLimiter] = {
     "rss": RateLimiter(2.0),
     "dcinside": RateLimiter(0.5),
     "trendshift": RateLimiter(3.0),
+    "sec_form4": RateLimiter(5.0),
+    "polymarket": RateLimiter(2.0),
+    "openrouter": RateLimiter(1.0),
 }
 
 
