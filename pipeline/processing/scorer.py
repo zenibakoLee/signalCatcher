@@ -11,7 +11,7 @@ from pipeline.db import get_connection
 logger = logging.getLogger(__name__)
 
 CONFIG_DIR = Path(__file__).resolve().parent.parent.parent / "config"
-BATCH_SIZE = 10
+BATCH_SIZE = 20  # 배치 확대 → 시스템 프롬프트 재전송·호출수 절반
 MODEL = "claude-haiku-4-5-20251001"
 
 
@@ -91,8 +91,10 @@ def _score_batch(
     try:
         response = client.messages.create(
             model=MODEL,
-            max_tokens=4000,
-            system=system_prompt,
+            max_tokens=8000,  # 배치20 수용 (출력 토큰은 실제 생성분만 과금)
+            # 프롬프트 캐싱: Haiku 최소 캐시 프리픽스는 4096토큰이라 현재 프롬프트(~1,700)는
+            # 캐시가 붙지 않음(무해·무비용). 프롬프트가 커지면 자동 적용되도록 남겨둠.
+            system=[{"type": "text", "text": system_prompt, "cache_control": {"type": "ephemeral"}}],
             messages=[{"role": "user", "content": user_message}],
         )
         text = response.content[0].text.strip()
