@@ -2,8 +2,10 @@
   "name": "dashboard",
   "version": "0.1.0",
   "private": true,
+  "type": "module",
   "scripts": {
     "dev": "next dev",
+    "test": "node --test src/**/*.test.ts",
     "build": "next build",
     "start": "next start",
     "lint": "eslint"

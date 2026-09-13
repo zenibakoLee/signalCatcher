@@ -10,7 +10,6 @@ mkdir -p "$LOG_DIR"
 
 PLISTS=(
     "com.signalcatcher.daily"
-    "com.signalcatcher.weekly"
     "com.signalcatcher.event"
     "com.signalcatcher.dashboard"
     "com.signalcatcher.tunnel"
@@ -18,6 +17,11 @@ PLISTS=(
 
 case "${1:-install}" in
     install)
+        # Remove the weekly agent left behind by versions before it was retired.
+        legacy_name="com.signalcatcher.weekly"
+        launchctl bootout "gui/$(id -u)/$legacy_name" 2>/dev/null || true
+        rm -f "$LAUNCH_AGENTS/$legacy_name.plist"
+
         for name in "${PLISTS[@]}"; do
             src="$SCRIPT_DIR/$name.plist"
             dst="$LAUNCH_AGENTS/$name.plist"
@@ -32,7 +36,6 @@ case "${1:-install}" in
         echo ""
         echo "All services installed:"
         echo "  daily     — 매일 07:00"
-        echo "  weekly    — 매주 일요일 09:00"
         echo "  event     — 매일 20:00"
         echo "  dashboard — 상시 (port 3000)"
         echo "  tunnel    — 상시 (Cloudflare Quick Tunnel)"

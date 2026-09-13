@@ -9,6 +9,9 @@ import {
   CategoryHeatmap,
 } from "@/components/charts";
 import { ExpandableText } from "@/components/expandable-text";
+import { FreshnessWarning } from "@/components/freshness-warning";
+import { getDailyFreshness } from "@/lib/freshness";
+import { getLatestFreshDailyCompletion } from "@/lib/pipeline-runs";
 
 export const dynamic = "force-dynamic";
 
@@ -46,6 +49,9 @@ export default async function Home({
   const { date } = await searchParams;
   const db = getDb();
 
+  const lastSuccessfulDaily = getLatestFreshDailyCompletion(db);
+  const freshness = getDailyFreshness(lastSuccessfulDaily);
+
   const availableDates = (
     db
       .prepare("SELECT digest_date FROM digests ORDER BY digest_date ASC")
@@ -54,9 +60,12 @@ export default async function Home({
 
   if (availableDates.length === 0) {
     return (
-      <div className="text-center py-20">
-        <h1 className="font-serif text-3xl font-bold mb-4">시그널 캐처</h1>
-        <p className="text-warm-gray">아직 생성된 다이제스트가 없습니다.</p>
+      <div className="space-y-8">
+        <FreshnessWarning freshness={freshness} />
+        <div className="text-center py-20">
+          <h1 className="font-serif text-3xl font-bold mb-4">시그널 캐처</h1>
+          <p className="text-warm-gray">아직 생성된 다이제스트가 없습니다.</p>
+        </div>
       </div>
     );
   }
@@ -170,6 +179,7 @@ export default async function Home({
 
   return (
     <div className="space-y-8">
+      <FreshnessWarning freshness={freshness} />
       <header className="border-b border-light-gray pb-6">
         <div className="relative mb-3">
           <DatePicker currentDate={targetDate} availableDates={availableDates} />

@@ -118,11 +118,10 @@ def get_unscored_items(date: str) -> list[dict]:
 
 def start_pipeline_run(run_type: str) -> int:
     conn = get_connection()
-    from datetime import datetime
 
     cur = conn.execute(
         "INSERT INTO pipeline_runs (run_type, started_at) VALUES (?, ?)",
-        (run_type, datetime.now().isoformat()),
+        (run_type, datetime.now(timezone.utc).isoformat()),
     )
     conn.commit()
     return cur.lastrowid
@@ -137,14 +136,13 @@ def complete_pipeline_run(
     duration_secs: float | None = None,
 ) -> None:
     conn = get_connection()
-    from datetime import datetime
 
     conn.execute(
         """UPDATE pipeline_runs
            SET completed_at=?, status=?, items_collected=?, items_scored=?, errors=?, duration_secs=?
            WHERE id=?""",
         (
-            datetime.now().isoformat(),
+            datetime.now(timezone.utc).isoformat(),
             status,
             items_collected,
             items_scored,
