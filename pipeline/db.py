@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta, timezone
 from pathlib import Path
 
 from pipeline.models import RawItem
@@ -36,10 +36,17 @@ def get_connection(readonly: bool = False) -> sqlite3.Connection:
 def init_db() -> None:
     DB_PATH.parent.mkdir(parents=True, exist_ok=True)
     conn = get_connection()
-    conn.executescript(_SCHEMA)
-    _migrate_scored_items(conn)
-    _migrate_theses(conn)
-    conn.commit()
+    if conn.in_transaction:
+        raise RuntimeError("database initialization requires no open transaction")
+    try:
+        conn.executescript("BEGIN IMMEDIATE;\n" + _SCHEMA)
+        _migrate_scored_items(conn)
+        _migrate_theses(conn)
+        _migrate_security_master(conn)
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
 
 
 def _migrate_scored_items(conn: sqlite3.Connection) -> None:
@@ -64,6 +71,90 @@ def _migrate_theses(conn: sqlite3.Connection) -> None:
         conn.execute("ALTER TABLE investment_theses ADD COLUMN depth_layer INTEGER")
     if "pricing_status" not in cols:
         conn.execute("ALTER TABLE investment_theses ADD COLUMN pricing_status TEXT")
+
+
+def _migrate_security_master(conn: sqlite3.Connection) -> None:
+    """Add SEC security-master storage atomically without rewriting records."""
+    conn.execute("SAVEPOINT security_master_migration")
+    try:
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS security_master (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                ticker TEXT NOT NULL,
+                company_name TEXT NOT NULL,
+                cik INTEGER NOT NULL,
+                exchange TEXT,
+                listing_status TEXT,
+                verification_source_url TEXT,
+                verification_as_of TEXT,
+                source_url TEXT NOT NULL,
+                source_as_of TEXT,
+                fetched_at TEXT NOT NULL,
+                source_status TEXT NOT NULL,
+                UNIQUE(ticker, source_url, fetched_at)
+            )
+        """)
+        security_columns = {
+            row[1]
+            for row in conn.execute("PRAGMA table_info(security_master)").fetchall()
+        }
+        if "verification_source_url" not in security_columns:
+            conn.execute(
+                "ALTER TABLE security_master ADD COLUMN verification_source_url TEXT"
+            )
+        if "verification_as_of" not in security_columns:
+            conn.execute(
+                "ALTER TABLE security_master ADD COLUMN verification_as_of TEXT"
+            )
+        columns = {
+            row[1]
+            for row in conn.execute("PRAGMA table_info(candidate_snapshots)").fetchall()
+        }
+        if columns and "security_master_id" not in columns:
+            conn.execute(
+                "ALTER TABLE candidate_snapshots "
+                "ADD COLUMN security_master_id INTEGER REFERENCES security_master(id)"
+            )
+            columns.add("security_master_id")
+        if {"status", "coverage", "security_master_id"} <= columns:
+            conn.execute("""
+                CREATE TRIGGER IF NOT EXISTS candidate_verified_listing_fk_insert
+                BEFORE INSERT ON candidate_snapshots
+                WHEN NEW.security_master_id IS NULL AND (
+                    NEW.status = 'scored' OR EXISTS (
+                        SELECT 1 FROM json_each(NEW.coverage, '$.present')
+                        WHERE value IN (
+                            'verified_us_listing',
+                            'verified_operating_issuer_sole_exchange_ticker_periodic'
+                        )
+                    )
+                )
+                BEGIN
+                    SELECT RAISE(ABORT, 'verified listing requires security_master_id');
+                END
+            """)
+            conn.execute("""
+                CREATE TRIGGER IF NOT EXISTS candidate_verified_listing_fk_update
+                BEFORE UPDATE ON candidate_snapshots
+                WHEN NEW.security_master_id IS NULL AND (
+                    NEW.status = 'scored' OR EXISTS (
+                        SELECT 1 FROM json_each(NEW.coverage, '$.present')
+                        WHERE value IN (
+                            'verified_us_listing',
+                            'verified_operating_issuer_sole_exchange_ticker_periodic'
+                        )
+                    )
+                )
+                BEGIN
+                    SELECT RAISE(ABORT, 'verified listing requires security_master_id');
+                END
+            """)
+    except Exception:
+        conn.execute("ROLLBACK TO security_master_migration")
+        conn.execute("RELEASE security_master_migration")
+        raise
+    else:
+        conn.execute("RELEASE security_master_migration")
 
 
 def insert_raw_item(item: RawItem) -> int | None:
@@ -98,7 +189,7 @@ def _kst_date_to_utc_range(date_str: str) -> tuple[str, str]:
     KST = timezone(timedelta(hours=9))
     parts = [int(p) for p in date_str.split("-")]
     kst_start = datetime(parts[0], parts[1], parts[2], tzinfo=KST)
-    utc_start = kst_start.astimezone(timezone.utc)
+    utc_start = kst_start.astimezone(UTC)
     utc_end = utc_start + timedelta(days=1)
     return utc_start.strftime("%Y-%m-%dT%H:%M:%S"), utc_end.strftime("%Y-%m-%dT%H:%M:%S")
 
@@ -121,7 +212,7 @@ def start_pipeline_run(run_type: str) -> int:
 
     cur = conn.execute(
         "INSERT INTO pipeline_runs (run_type, started_at) VALUES (?, ?)",
-        (run_type, datetime.now(timezone.utc).isoformat()),
+        (run_type, datetime.now(UTC).isoformat()),
     )
     conn.commit()
     return cur.lastrowid
@@ -142,7 +233,7 @@ def complete_pipeline_run(
            SET completed_at=?, status=?, items_collected=?, items_scored=?, errors=?, duration_secs=?
            WHERE id=?""",
         (
-            datetime.now(timezone.utc).isoformat(),
+            datetime.now(UTC).isoformat(),
             status,
             items_collected,
             items_scored,
@@ -378,6 +469,22 @@ CREATE INDEX IF NOT EXISTS idx_theses_direction ON investment_theses(direction);
 
 -- Preliminary v1 discovery output. Trend keywords are evidence-backed emerging
 -- signals until a future grouping system supplies strict theme membership proof.
+CREATE TABLE IF NOT EXISTS security_master (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    ticker TEXT NOT NULL,
+    company_name TEXT NOT NULL,
+    cik INTEGER NOT NULL,
+    exchange TEXT,
+    listing_status TEXT,
+    verification_source_url TEXT,
+    verification_as_of TEXT,
+    source_url TEXT NOT NULL,
+    source_as_of TEXT,
+    fetched_at TEXT NOT NULL,
+    source_status TEXT NOT NULL,
+    UNIQUE(ticker, source_url, fetched_at)
+);
+
 CREATE TABLE IF NOT EXISTS themes (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     theme_key TEXT NOT NULL UNIQUE,
@@ -412,6 +519,7 @@ CREATE TABLE IF NOT EXISTS candidate_snapshots (
     hypothesis_category TEXT CHECK(hypothesis_category IN ('buy', 'avoid')),
     thesis_id INTEGER REFERENCES investment_theses(id),
     company_analysis_id INTEGER REFERENCES company_analyses(id),
+    security_master_id INTEGER REFERENCES security_master(id),
     as_of TEXT NOT NULL,
     pipeline_run_id INTEGER NOT NULL REFERENCES pipeline_runs(id),
     feature_version TEXT NOT NULL,
@@ -426,4 +534,32 @@ CREATE TABLE IF NOT EXISTS candidate_snapshots (
     UNIQUE(ticker, as_of, pipeline_run_id, feature_version)
 );
 CREATE INDEX IF NOT EXISTS idx_candidate_snapshots_as_of_rank ON candidate_snapshots(as_of DESC, rank ASC);
+CREATE TRIGGER IF NOT EXISTS candidate_verified_listing_fk_insert
+BEFORE INSERT ON candidate_snapshots
+WHEN NEW.security_master_id IS NULL AND (
+    NEW.status = 'scored' OR EXISTS (
+        SELECT 1 FROM json_each(NEW.coverage, '$.present')
+        WHERE value IN (
+            'verified_us_listing',
+            'verified_operating_issuer_sole_exchange_ticker_periodic'
+        )
+    )
+)
+BEGIN
+    SELECT RAISE(ABORT, 'verified listing requires security_master_id');
+END;
+CREATE TRIGGER IF NOT EXISTS candidate_verified_listing_fk_update
+BEFORE UPDATE ON candidate_snapshots
+WHEN NEW.security_master_id IS NULL AND (
+    NEW.status = 'scored' OR EXISTS (
+        SELECT 1 FROM json_each(NEW.coverage, '$.present')
+        WHERE value IN (
+            'verified_us_listing',
+            'verified_operating_issuer_sole_exchange_ticker_periodic'
+        )
+    )
+)
+BEGIN
+    SELECT RAISE(ABORT, 'verified listing requires security_master_id');
+END;
 """
