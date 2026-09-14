@@ -310,6 +310,25 @@ def test_codex_json_event_usage_is_audited_as_total_tokens() -> None:
     assert llm.CodexOAuthBoundary._parse_total_tokens(stdout, "") == 6044
 
 
+def test_codex_json_event_usage_rejects_values_outside_sqlite_integer_range() -> None:
+    stdout = json.dumps({
+        "type": "turn.completed",
+        "usage": {"input_tokens": 2**63 - 1, "output_tokens": 1},
+    })
+
+    assert llm.CodexOAuthBoundary._parse_total_tokens(stdout, "") is None
+
+
+def test_codex_json_event_usage_rejects_integer_literals_beyond_python_limit() -> None:
+    stdout = (
+        '{"type":"turn.completed","usage":{"input_tokens":1,"output_tokens":'
+        + "9" * 5_000
+        + "}}"
+    )
+
+    assert llm.CodexOAuthBoundary._parse_total_tokens(stdout, "") is None
+
+
 def test_missing_token_usage_is_completed_but_auditable_as_unknown(tmp_path: Path) -> None:
     result = boundary(tmp_path, success_codex(tmp_path, stderr="no usage here")).complete(
         instructions="a", input_text="b", max_output_tokens=1,
@@ -343,6 +362,54 @@ def test_request_caps_are_atomic_per_run_and_day_with_explicit_terra_caps(tmp_pa
     assert [r["status"] for r in records(tmp_path / "usage.sqlite3")] == [
         "completed", "request_rejected", "completed", "request_rejected"
     ]
+
+
+def test_legacy_subscription_ledger_is_migrated_additively(tmp_path: Path) -> None:
+    ledger = tmp_path / "usage.sqlite3"
+    with sqlite3.connect(ledger) as conn:
+        conn.executescript("""
+            CREATE TABLE llm_requests (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                billing_mode TEXT NOT NULL,
+                run_id TEXT NOT NULL,
+                workload TEXT NOT NULL,
+                model TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                finalized_at TEXT,
+                day_utc TEXT NOT NULL,
+                status TEXT NOT NULL,
+                latency_ms INTEGER,
+                total_tokens INTEGER,
+                token_usage_status TEXT NOT NULL,
+                failure_detail TEXT
+            );
+            CREATE INDEX idx_llm_requests_run ON llm_requests(run_id);
+            CREATE INDEX idx_llm_requests_day ON llm_requests(day_utc);
+        """)
+        conn.execute(
+            """INSERT INTO llm_requests
+               (billing_mode, run_id, workload, model, created_at, day_utc,
+                status, token_usage_status)
+               VALUES (?, ?, ?, ?, ?, ?, 'reserved', 'pending')""",
+            (
+                llm.BILLING_MODE, "legacy-run", "legacy-work", llm.LUNA_MODEL,
+                "2026-01-01T00:00:00+00:00", "2026-01-01",
+            ),
+        )
+
+    llm.CodexOAuthBoundary(
+        codex_path=success_codex(tmp_path), ledger_path=ledger,
+        timeout_seconds=2, lease_grace_seconds=0,
+    )
+
+    with sqlite3.connect(ledger) as conn:
+        columns = {row[1] for row in conn.execute("PRAGMA table_info(llm_requests)")}
+        row = conn.execute(
+            "SELECT status, execution_id, owner_id, lease_expires_at FROM llm_requests"
+        ).fetchone()
+    assert {"execution_id", "owner_id", "lease_expires_at"} <= columns
+    assert row[0] == "unknown_outcome"
+    assert row[1] and row[2] and row[3]
 
 
 def test_stale_reservations_reconcile_after_timeout_and_grace_but_fresh_leases_survive(tmp_path: Path) -> None:

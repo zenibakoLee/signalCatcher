@@ -46,6 +46,7 @@ OUTPUT_BYTES_PER_TOKEN = ACCEPTED_OUTPUT_BYTES_PER_TOKEN
 OUTPUT_FRAMING_BYTES = 4_096
 MAX_CAPTURED_STDOUT_BYTES = 262_144
 MAX_CAPTURED_STDERR_BYTES = 65_536
+SQLITE_MAX_INTEGER = 2**63 - 1
 
 
 class LLMError(RuntimeError):
@@ -150,6 +151,7 @@ CREATE TABLE IF NOT EXISTS llm_requests (
 );
 CREATE INDEX IF NOT EXISTS idx_llm_requests_run ON llm_requests(run_id);
 CREATE INDEX IF NOT EXISTS idx_llm_requests_day ON llm_requests(day_utc);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_llm_requests_execution ON llm_requests(execution_id);
 """
 
 _TOKEN_USAGE = re.compile(
@@ -481,12 +483,43 @@ class CodexOAuthBoundary:
         try:
             self._ledger_path.parent.mkdir(parents=True, exist_ok=True)
             with self._connect() as conn:
-                conn.executescript(_LEDGER_SCHEMA)
+                try:
+                    conn.executescript(_LEDGER_SCHEMA)
+                except sqlite3.OperationalError as error:
+                    if "no such column: execution_id" not in str(error):
+                        raise
                 conn.execute("BEGIN IMMEDIATE")
+                self._migrate_ledger(conn)
                 self._reconcile_stale(conn, datetime.now(UTC))
                 conn.commit()
         except sqlite3.Error as error:
             raise LLMConfigurationError("cannot initialize subscription usage ledger") from error
+
+    @staticmethod
+    def _migrate_ledger(conn: sqlite3.Connection) -> None:
+        columns = {row["name"] for row in conn.execute("PRAGMA table_info(llm_requests)")}
+        if "execution_id" not in columns:
+            conn.execute("ALTER TABLE llm_requests ADD COLUMN execution_id TEXT")
+        if "owner_id" not in columns:
+            conn.execute(
+                "ALTER TABLE llm_requests ADD COLUMN owner_id TEXT NOT NULL DEFAULT 'legacy'"
+            )
+        if "lease_expires_at" not in columns:
+            conn.execute(
+                """ALTER TABLE llm_requests ADD COLUMN lease_expires_at TEXT NOT NULL
+                   DEFAULT '1970-01-01T00:00:00+00:00'"""
+            )
+        missing = conn.execute(
+            "SELECT id FROM llm_requests WHERE execution_id IS NULL OR execution_id=''"
+        ).fetchall()
+        for row in missing:
+            conn.execute(
+                "UPDATE llm_requests SET execution_id=? WHERE id=?",
+                (str(uuid4()), row["id"]),
+            )
+        conn.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_llm_requests_execution ON llm_requests(execution_id)"
+        )
 
     def _connect(self) -> sqlite3.Connection:
         conn = sqlite3.connect(self._ledger_path, timeout=30, isolation_level=None)
@@ -613,7 +646,7 @@ class CodexOAuthBoundary:
         for line in reversed(stdout.splitlines()):
             try:
                 event = json.loads(line)
-            except json.JSONDecodeError:
+            except (json.JSONDecodeError, ValueError):
                 continue
             if not isinstance(event, dict) or event.get("type") != "turn.completed":
                 continue
@@ -631,9 +664,16 @@ class CodexOAuthBoundary:
                 or output_tokens < 0
             ):
                 return None
-            return input_tokens + output_tokens
+            total = input_tokens + output_tokens
+            return total if total <= SQLITE_MAX_INTEGER else None
         match = _TOKEN_USAGE.search(stderr)
-        return int(match.group(1).replace(",", "")) if match else None
+        if match is None:
+            return None
+        try:
+            total = int(match.group(1).replace(",", ""))
+        except ValueError:
+            return None
+        return total if total <= SQLITE_MAX_INTEGER else None
 
     @staticmethod
     def _assert_no_tool_activity(stdout: str) -> None:
@@ -643,7 +683,7 @@ class CodexOAuthBoundary:
                 continue
             try:
                 event = json.loads(line)
-            except json.JSONDecodeError as error:
+            except (json.JSONDecodeError, ValueError) as error:
                 raise LLMOutputError("Codex JSON event stream was invalid") from error
             pending = [event]
             while pending:
