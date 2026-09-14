@@ -16,7 +16,7 @@ def test_credentials_use_env_override_and_keychain_for_only_missing_value(monkey
 
     assert toss_api._credentials(run=fake_run) == ("test-env-client-id", "test-only-keychain-secret")
     assert calls == [(
-        ["security", "find-generic-password", "-s", "toss-api-clientSecret", "-w"],
+        ["security", "find-generic-password", "-s", "toss-api-clientSecret", "-w", "/Users/haejoonlee/Library/Keychains/login.keychain-db"],
         {"capture_output": True, "check": False, "text": True, "timeout": 3},
     )]
 
@@ -36,10 +36,10 @@ def test_credentials_return_empty_on_keychain_failure_without_logging_output(mon
         assert toss_api._credentials(run=fake_run) == ("", "")
 
     assert calls == [
-        (["security", "find-generic-password", "-s", "toss-api-clientId", "-w"], {
+        (["security", "find-generic-password", "-s", "toss-api-clientId", "-w", "/Users/haejoonlee/Library/Keychains/login.keychain-db"], {
             "capture_output": True, "check": False, "text": True, "timeout": 3,
         }),
-        (["security", "find-generic-password", "-s", "toss-api-clientSecret", "-w"], {
+        (["security", "find-generic-password", "-s", "toss-api-clientSecret", "-w", "/Users/haejoonlee/Library/Keychains/login.keychain-db"], {
             "capture_output": True, "check": False, "text": True, "timeout": 3,
         }),
     ]

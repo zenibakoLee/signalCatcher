@@ -34,13 +34,14 @@ _KEYCHAIN_SERVICES = {
     "TOSS_API_KEY": "toss-api-clientId",
     "TOSS_SECRET_KEY": "toss-api-clientSecret",
 }
+_LOGIN_KEYCHAIN = os.path.expanduser("~/Library/Keychains/login.keychain-db")
 
 
 def _keychain_credential(service: str, run=subprocess.run) -> str:
     """Return a Keychain credential without exposing command output on failure."""
     try:
         result = run(
-            ["security", "find-generic-password", "-s", service, "-w"],
+            ["security", "find-generic-password", "-s", service, "-w", _LOGIN_KEYCHAIN],
             capture_output=True,
             check=False,
             text=True,
