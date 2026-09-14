@@ -390,9 +390,11 @@ def test_cache_write_usage_is_audited_and_charged(tmp_path: Path) -> None:
 
 def test_environment_pricing_is_reviewed_immutable_and_ignores_price_overrides(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setenv("SIGNALCATCHER_LLM_LEDGER_PATH", str(tmp_path / "usage.sqlite3"))
+    monkeypatch.delenv("SIGNALCATCHER_OPENAI_DAILY_BUDGET_USD", raising=False)
     monkeypatch.setenv("SIGNALCATCHER_OPENAI_LUNA_INPUT_COST_PER_MILLION_USD", "999")
     boundary_from_env = llm.OpenAIResponsesBoundary.from_environment()
 
+    assert boundary_from_env._daily_budget_usd == Decimal("2.00")
     assert boundary_from_env._pricing[llm.LUNA_MODEL] == llm.ModelPricing(
         input_per_million=Decimal("0.20"), cached_input_per_million=Decimal("0.02"),
         cache_write_per_million=Decimal("0.25"), output_per_million=Decimal("1.20"),

@@ -22,6 +22,7 @@ DEFAULT_MAX_INPUT_BYTES = 100_000
 DEFAULT_MAX_OUTPUT_TOKENS = 8_000
 DEFAULT_MAX_REQUESTS_PER_RUN = 40
 DEFAULT_MAX_TERRA_REQUESTS_PER_RUN = 8
+DEFAULT_DAILY_BUDGET_USD = "2.00"
 INPUT_FRAMING_TOKEN_HEADROOM = 64
 BUILTIN_PRICING_VERSION = "openai-reviewed-2026-09-14"
 BUILTIN_PRICING_EFFECTIVE_DATE = "2026-09-14"
@@ -206,7 +207,9 @@ class OpenAIResponsesBoundary:
             client_factory=_openai_client,
             pricing_by_model=BUILTIN_PRICING,
             ledger_path=Path(os.environ.get("SIGNALCATCHER_LLM_LEDGER_PATH", "data/openai_usage.sqlite3")),
-            daily_budget_usd=os.environ.get("SIGNALCATCHER_OPENAI_DAILY_BUDGET_USD"),
+            daily_budget_usd=os.environ.get(
+                "SIGNALCATCHER_OPENAI_DAILY_BUDGET_USD", DEFAULT_DAILY_BUDGET_USD
+            ),
             max_input_bytes=_positive_int("SIGNALCATCHER_OPENAI_MAX_INPUT_BYTES", DEFAULT_MAX_INPUT_BYTES),
             max_output_tokens=_positive_int("SIGNALCATCHER_OPENAI_MAX_OUTPUT_TOKENS", DEFAULT_MAX_OUTPUT_TOKENS),
             max_requests_per_run=_positive_int("SIGNALCATCHER_OPENAI_MAX_REQUESTS_PER_RUN", DEFAULT_MAX_REQUESTS_PER_RUN),
