@@ -417,31 +417,31 @@ def _closed_object(properties: dict) -> dict:
 
 def _analysis_schema() -> dict:
     question = _closed_object({
-        "question": {"type": "string", "minLength": 1},
-        "answer": {"type": "string", "enum": ["yes", "partial", "no", "unknown"]},
-        "evidence": {"type": "string", "minLength": 1},
+        "question": {"type": "string", "minLength": 1, "maxLength": 1_000},
+        "answer": {"type": "string", "maxLength": 7, "enum": ["yes", "partial", "no", "unknown"]},
+        "evidence": {"type": "string", "minLength": 1, "maxLength": 4_000},
     })
     return llm.strict_object_schema("company_analysis", {
-        "company_name": {"type": "string", "minLength": 1},
-        "market": {"type": "string", "enum": ["US", "KR"]},
+        "company_name": {"type": "string", "minLength": 1, "maxLength": 300},
+        "market": {"type": "string", "maxLength": 2, "enum": ["US", "KR"]},
         "momentum_score": {"type": "integer", "minimum": 0, "maximum": 100},
-        "verdict": {"type": "string", "enum": ["강한 모멘텀", "관심 관찰", "모멘텀 약화", "경고"]},
-        "verdict_summary": {"type": "string", "minLength": 1},
+        "verdict": {"type": "string", "maxLength": 10, "enum": ["강한 모멘텀", "관심 관찰", "모멘텀 약화", "경고"]},
+        "verdict_summary": {"type": "string", "minLength": 1, "maxLength": 4_000},
         "five_questions": {"type": "array", "minItems": 5, "maxItems": 5, "items": question},
         "fake_or_real": _closed_object({
-            "judgment": {"type": "string", "enum": ["real", "fake", "mixed", "too_early"]},
-            "reasoning": {"type": "string", "minLength": 1},
+            "judgment": {"type": "string", "maxLength": 9, "enum": ["real", "fake", "mixed", "too_early"]},
+            "reasoning": {"type": "string", "minLength": 1, "maxLength": 4_000},
         }),
         "signal_timeline": {"type": "array", "maxItems": 20, "items": _closed_object({
             "date": {"type": "string", "minLength": 10, "maxLength": 10},
-            "event": {"type": "string", "minLength": 1},
-            "significance": {"type": "string", "minLength": 1},
+            "event": {"type": "string", "minLength": 1, "maxLength": 2_000},
+            "significance": {"type": "string", "minLength": 1, "maxLength": 2_000},
         })},
         "risk_factors": {"type": "array", "maxItems": 20, "items": _closed_object({
-            "factor": {"type": "string", "minLength": 1},
-            "severity": {"type": "string", "enum": ["high", "medium", "low"]},
+            "factor": {"type": "string", "minLength": 1, "maxLength": 2_000},
+            "severity": {"type": "string", "maxLength": 6, "enum": ["high", "medium", "low"]},
         })},
-        "action_note": {"type": "string", "minLength": 1},
+        "action_note": {"type": "string", "minLength": 1, "maxLength": 4_000},
     })
 
 

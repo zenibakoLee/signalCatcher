@@ -285,21 +285,23 @@ def _digest_schema(item_count: int) -> dict:
     commentary = {
         "type": "object",
         "properties": {
-            "title": {"type": "string", "minLength": 1},
+            "title": {"type": "string", "minLength": 1, "maxLength": 500},
             "score": {"type": "integer", "minimum": 0, "maximum": 100},
-            "source": {"type": "string", "minLength": 1},
-            "url": {"type": "string"},
-            "commentary": {"type": "string", "minLength": 1},
-            "related_tickers": {"type": "array", "maxItems": 3, "items": {"type": "string", "minLength": 1}},
+            "source": {"type": "string", "minLength": 1, "maxLength": 100},
+            "url": {"type": "string", "maxLength": 2_000},
+            "commentary": {"type": "string", "minLength": 1, "maxLength": 2_000},
+            "related_tickers": {"type": "array", "maxItems": 3, "items": {
+                "type": "string", "minLength": 1, "maxLength": 32,
+            }},
         },
         "required": ["title", "score", "source", "url", "commentary", "related_tickers"],
         "additionalProperties": False,
     }
     return llm.strict_object_schema("daily_digest", {
         "headline": {"type": "string", "minLength": 1, "maxLength": 80},
-        "summary": {"type": "string", "minLength": 1},
+        "summary": {"type": "string", "minLength": 1, "maxLength": 8_000},
         "top_items_commentary": {"type": "array", "minItems": 1, "maxItems": item_count, "items": commentary},
-        "trend_section": {"type": "string"},
-        "social_buzz_note": {"type": "string"},
-        "one_line_takeaway": {"type": "string", "minLength": 1},
+        "trend_section": {"type": "string", "maxLength": 4_000},
+        "social_buzz_note": {"type": "string", "maxLength": 4_000},
+        "one_line_takeaway": {"type": "string", "minLength": 1, "maxLength": 1_000},
     })

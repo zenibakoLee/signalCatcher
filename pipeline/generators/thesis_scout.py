@@ -92,7 +92,7 @@ SCOUT_TOOL = {
     "input_schema": {
         "type": "object",
         "properties": {
-            "market_read": {"type": "string", "description": "현재 시그널들이 그리는 큰 그림 2-3문장 (한국어)"},
+            "market_read": {"type": "string", "maxLength": 4_000, "description": "현재 시그널들이 그리는 큰 그림 2-3문장 (한국어)"},
             "theses": {
                 "type": "array",
                 "minItems": 6,
@@ -100,17 +100,17 @@ SCOUT_TOOL = {
                 "items": {
                     "type": "object",
                     "properties": {
-                        "direction": {"type": "string", "enum": ["buy", "avoid"], "description": "buy=발굴, avoid=회피/청산"},
-                        "company": {"type": "string"},
-                        "ticker": {"type": "string", "description": "미국=티커, 한국=6자리코드, 일본=4자리코드"},
-                        "market": {"type": "string", "enum": ["US", "KR", "JP"]},
-                        "bottleneck": {"type": "string", "description": "핵심 병목/논거 한 줄 (한국어)"},
-                        "reasoning": {"type": "string", "description": "2차·3차 추론 체인. A→B→C 연결을 명시 (한국어, 3-5문장)"},
+                        "direction": {"type": "string", "maxLength": 5, "enum": ["buy", "avoid"], "description": "buy=발굴, avoid=회피/청산"},
+                        "company": {"type": "string", "maxLength": 300},
+                        "ticker": {"type": "string", "maxLength": 32, "description": "미국=티커, 한국=6자리코드, 일본=4자리코드"},
+                        "market": {"type": "string", "maxLength": 2, "enum": ["US", "KR", "JP"]},
+                        "bottleneck": {"type": "string", "maxLength": 2_000, "description": "핵심 병목/논거 한 줄 (한국어)"},
+                        "reasoning": {"type": "string", "maxLength": 4_000, "description": "2차·3차 추론 체인. A→B→C 연결을 명시 (한국어, 3-5문장)"},
                         "depth_layer": {"type": "integer", "enum": [1, 2, 3], "description": "병목 깊이. 1=최심(대체불가), 2=중간, 3=표층(진입쉬움). 매수 발굴 필수, 회피는 생략 가능"},
-                        "pricing_status": {"type": "string", "enum": ["unpriced", "partial", "mostly", "overpriced"], "description": "주가 반영 정도"},
-                        "conviction": {"type": "string", "enum": ["high", "medium", "low"]},
-                        "falsifier": {"type": "string", "description": "이 논리가 틀렸음을 알 수 있는 조건 (한국어)"},
-                        "driving_signals": {"type": "array", "minItems": 1, "maxItems": 3, "items": {"type": "string", "minLength": 1}, "description": "근거가 된 시그널 제목 1-3개"},
+                        "pricing_status": {"type": "string", "maxLength": 10, "enum": ["unpriced", "partial", "mostly", "overpriced"], "description": "주가 반영 정도"},
+                        "conviction": {"type": "string", "maxLength": 6, "enum": ["high", "medium", "low"]},
+                        "falsifier": {"type": "string", "maxLength": 2_000, "description": "이 논리가 틀렸음을 알 수 있는 조건 (한국어)"},
+                        "driving_signals": {"type": "array", "minItems": 1, "maxItems": 3, "items": {"type": "string", "minLength": 1, "maxLength": 500}, "description": "근거가 된 시그널 제목 1-3개"},
                     },
                     "required": ["direction", "company", "ticker", "market", "bottleneck", "reasoning", "depth_layer", "pricing_status", "conviction", "falsifier", "driving_signals"],
                     "additionalProperties": False,

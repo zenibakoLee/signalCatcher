@@ -364,34 +364,36 @@ def _closed_object(properties: dict) -> dict:
 def _pre_event_schema() -> dict:
     return llm.strict_object_schema("pre_event_briefing", {
         "headline": {"type": "string", "minLength": 1, "maxLength": 80},
-        "summary": {"type": "string", "minLength": 1},
+        "summary": {"type": "string", "minLength": 1, "maxLength": 8_000},
         "expected_items": {
             "type": "array", "minItems": 8, "maxItems": 12,
             "items": _closed_object({
-                "item": {"type": "string", "minLength": 1},
-                "investment_relevance": {"type": "string", "enum": ["높음", "중간", "낮음"]},
-                "reasoning": {"type": "string", "minLength": 1},
+                "item": {"type": "string", "minLength": 1, "maxLength": 2_000},
+                "investment_relevance": {
+                    "type": "string", "maxLength": 2, "enum": ["높음", "중간", "낮음"],
+                },
+                "reasoning": {"type": "string", "minLength": 1, "maxLength": 4_000},
             }),
         },
-        "watch_points": {"type": "string", "minLength": 1},
+        "watch_points": {"type": "string", "minLength": 1, "maxLength": 8_000},
     })
 
 
 def _post_event_schema() -> dict:
     announcement = _closed_object({
-        "item": {"type": "string", "minLength": 1},
-        "significance": {"type": "string", "minLength": 1},
+        "item": {"type": "string", "minLength": 1, "maxLength": 2_000},
+        "significance": {"type": "string", "minLength": 1, "maxLength": 4_000},
     })
     return llm.strict_object_schema("post_event_briefing", {
         "headline": {"type": "string", "minLength": 1, "maxLength": 80},
-        "summary": {"type": "string", "minLength": 1},
-        "key_announcements": {"type": "array", "items": announcement},
-        "silent_signals": {"type": "array", "items": _closed_object({
-            "expected_item": {"type": "string", "minLength": 1},
-            "interpretation": {"type": "string", "minLength": 1},
+        "summary": {"type": "string", "minLength": 1, "maxLength": 8_000},
+        "key_announcements": {"type": "array", "maxItems": 30, "items": announcement},
+        "silent_signals": {"type": "array", "maxItems": 30, "items": _closed_object({
+            "expected_item": {"type": "string", "minLength": 1, "maxLength": 2_000},
+            "interpretation": {"type": "string", "minLength": 1, "maxLength": 4_000},
         })},
-        "surprises": {"type": "array", "items": announcement},
-        "investment_takeaway": {"type": "string", "minLength": 1},
+        "surprises": {"type": "array", "maxItems": 30, "items": announcement},
+        "investment_takeaway": {"type": "string", "minLength": 1, "maxLength": 8_000},
     })
 
 

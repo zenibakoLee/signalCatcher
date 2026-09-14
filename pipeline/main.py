@@ -9,7 +9,6 @@ from pathlib import Path
 
 import click
 import yaml
-from dotenv import load_dotenv
 
 from pipeline import llm
 from pipeline.db import (
@@ -26,7 +25,14 @@ from pipeline.utils.logging_config import setup_logging
 
 logger = logging.getLogger(__name__)
 
+TRANSLATION_BATCH_SIZE = 100
+TRANSLATION_MAX_OUTPUT_TOKENS = 8_000
+
 CONFIG_DIR = Path(__file__).resolve().parent.parent / "config"
+
+
+def _new_llm_run_id(kind: str, pipeline_run_id: int) -> str:
+    return f"{kind}-{pipeline_run_id}-{uuid.uuid4()}"
 
 
 def _load_sources_config() -> dict:
@@ -112,7 +118,6 @@ async def _collect_all(keywords: list[str], since: datetime) -> tuple[list, list
 @click.group()
 def cli():
     """Signal Catcher pipeline CLI."""
-    load_dotenv()
     setup_logging()
     init_db()
     load_keywords_from_yaml(CONFIG_DIR / "keywords.yaml")
@@ -124,6 +129,7 @@ def daily(hours: int):
     """Run the daily collection pipeline."""
     start = time.time()
     run_id = start_pipeline_run("daily")
+    llm_run_id = _new_llm_run_id("daily", run_id)
     since = datetime.now() - timedelta(hours=hours)
     keywords = get_active_keywords()
 
@@ -150,7 +156,7 @@ def daily(hours: int):
 
         # Step 4.5: Auto-manage keywords (discover/spike/retire)
         from pipeline.generators.keyword_suggestions import auto_manage_keywords
-        kw_result = auto_manage_keywords(run_id=run_id)
+        kw_result = auto_manage_keywords(run_id=llm_run_id)
         logger.info("Keyword management: %s", kw_result)
         if kw_result.get("added") or kw_result.get("spiked") or kw_result.get("resurged") or kw_result.get("retired"):
             from pipeline.delivery.discord_webhook import deliver_keyword_management
@@ -158,15 +164,15 @@ def daily(hours: int):
 
         # Step 5: Detect trends (z-score acceleration)
         from pipeline.processing.trend_detector import detect_trends
-        trend_alerts = detect_trends(run_id=run_id)
+        trend_alerts = detect_trends(run_id=llm_run_id)
 
-        # Step 6: Score bounded items with OpenAI Responses.
+        # Step 6: Score bounded items through isolated Codex OAuth.
         from pipeline.processing.scorer import score_items
-        items_scored = score_items(new_ids, run_id=run_id)
+        items_scored = score_items(new_ids, run_id=llm_run_id)
 
         # Step 7: Generate digest
         from pipeline.generators.daily_digest import generate_digest
-        digest_data = generate_digest(run_id=run_id)
+        digest_data = generate_digest(run_id=llm_run_id)
 
         # Step 7.5: Generate comic for digest
         comic_path = None
@@ -188,7 +194,7 @@ def daily(hours: int):
 
         # Step 9: 시그널 기반 투자 대상 발굴 (2차적 추론 — 매수 발굴 + 회피/청산)
         from pipeline.generators.thesis_scout import run_thesis_scout
-        theses = run_thesis_scout(run_id=run_id)
+        theses = run_thesis_scout(run_id=llm_run_id)
         if theses:
             from pipeline.delivery.discord_webhook import deliver_investment_theses
             deliver_investment_theses(theses)
@@ -411,7 +417,7 @@ def translate_titles(batch_limit: int):
 
     logger.info("translate-titles: %d items to translate", len(rows))
 
-    batch_size = 30
+    batch_size = TRANSLATION_BATCH_SIZE
     total = 0
     run_id = f"translate-titles-{uuid.uuid4()}"
     staged: list[tuple[object, dict]] = []
@@ -428,13 +434,13 @@ def translate_titles(batch_limit: int):
         translation_entry = {
             "type": "object", "properties": {
                 "index": {"type": "integer", "minimum": 1, "maximum": len(batch)},
-                "title_ko": {"type": "string", "minLength": 1},
+                "title_ko": {"type": "string", "minLength": 1, "maxLength": 500},
             }, "required": ["index", "title_ko"], "additionalProperties": False,
         }
         llm.require_no_business_transaction(conn)
         result = llm.get_boundary().complete(
             instructions="Translate titles faithfully into natural Korean.", input_text=prompt,
-            max_output_tokens=3000, model=llm.LUNA_MODEL, workload="title_translation",
+            max_output_tokens=TRANSLATION_MAX_OUTPUT_TOKENS, model=llm.LUNA_MODEL, workload="title_translation",
             run_id=run_id,
             output_schema=llm.strict_object_schema("title_translations", {"translations": {
                 "type": "array", "minItems": len(batch), "maxItems": len(batch), "items": translation_entry,

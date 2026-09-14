@@ -244,8 +244,11 @@ JSON 객체로 반환: {{"interpretations": [{{"keyword": "...", "interpretation
     interpretation_entry = {
         "type": "object",
         "properties": {
-            "keyword": {"type": "string", "enum": [alert.keyword for alert in alerts]},
-            "interpretation": {"type": "string", "minLength": 1},
+            "keyword": {
+                "type": "string", "maxLength": 200,
+                "enum": [alert.keyword for alert in alerts],
+            },
+            "interpretation": {"type": "string", "minLength": 1, "maxLength": 2_000},
         },
         "required": ["keyword", "interpretation"],
         "additionalProperties": False,

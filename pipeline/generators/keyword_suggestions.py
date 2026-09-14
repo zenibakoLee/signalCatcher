@@ -280,6 +280,7 @@ JSON 객체로 반환:
             "keyword": {"type": "string", "minLength": 1, "maxLength": 80},
             "category": {
                 "type": "string",
+                "maxLength": 32,
                 "enum": ["ai_model", "hardware", "framework", "concept", "company", "infrastructure"],
             },
             "reason": {"type": "string", "minLength": 1, "maxLength": 30},

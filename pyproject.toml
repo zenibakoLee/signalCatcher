@@ -4,7 +4,6 @@ version = "0.1.0"
 description = "Investment signal detection system — catch the next NVIDIA 2012 moment"
 requires-python = ">=3.12"
 dependencies = [
-    "openai>=1.0,<3",
     "httpx>=0.27",
     "feedparser>=6.0",
     "pydantic>=2.7",

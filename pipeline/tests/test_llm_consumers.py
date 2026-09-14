@@ -344,5 +344,5 @@ def test_all_generator_contracts_are_recursively_strict_and_typed() -> None:
         {"name": "investment_theses", "schema": thesis_scout.SCOUT_TOOL["input_schema"]},
     ]
     for schema in schemas:
-        formatted = llm.OpenAIResponsesBoundary._structured_format(schema)
+        formatted = llm.CodexOAuthBoundary._structured_format(schema)
         assert formatted["strict"] is True

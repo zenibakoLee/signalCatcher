@@ -11,7 +11,9 @@ from pipeline.db import get_connection
 logger = logging.getLogger(__name__)
 
 CONFIG_DIR = Path(__file__).resolve().parent.parent.parent / "config"
-BATCH_SIZE = 20
+BATCH_SIZE = 100
+MAX_SNIPPET_CHARS = 2_000
+SCORING_MAX_OUTPUT_TOKENS = 20_000
 MAX_SCORED_ITEMS_PER_RUN = 400
 MODEL = llm.MODEL
 
@@ -91,7 +93,7 @@ def _score_batch(
 ) -> list[tuple[Any, dict]]:
     items_text = []
     for index, row in enumerate(batch, 1):
-        snippet = (row["content_snippet"] or "")[:2000]
+        snippet = (row["content_snippet"] or "")[:MAX_SNIPPET_CHARS]
         items_text.append(f'{index}. [{row["source"].upper()}]{_format_buzz(row["metadata"])} "{row["title"]}" — {snippet}')
     user_message = (
         "Score these items. Return ONLY a JSON object, no other text:\n\n"
@@ -105,7 +107,7 @@ def _score_batch(
     result = llm.get_boundary().complete(
         instructions=system_prompt,
         input_text=user_message,
-        max_output_tokens=8000,
+        max_output_tokens=SCORING_MAX_OUTPUT_TOKENS,
         workload="scoring",
         run_id=run_id,
         output_schema=_score_schema(len(batch)),
@@ -133,14 +135,16 @@ def _score_schema(batch_size: int) -> dict[str, Any]:
         "properties": {
             "index": {"type": "integer", "minimum": 1, "maximum": batch_size},
             "score": {"type": "integer", "minimum": 0, "maximum": 100},
-            "reasoning": {"type": "string", "minLength": 1},
+            "reasoning": {"type": "string", "minLength": 1, "maxLength": 2_000},
             "category": {
                 "type": "string",
+                "maxLength": 32,
                 "enum": ["breakthrough", "trend", "product", "research", "infrastructure", "policy"],
             },
-            "title_ko": {"type": "string", "minLength": 1},
+            "title_ko": {"type": "string", "minLength": 1, "maxLength": 500},
             "related_tickers": {
-                "type": "array", "maxItems": 3, "items": {"type": "string", "minLength": 1}
+                "type": "array", "maxItems": 3,
+                "items": {"type": "string", "minLength": 1, "maxLength": 32},
             },
         },
         "required": ["index", "score", "reasoning", "category", "title_ko", "related_tickers"],
