@@ -230,6 +230,55 @@ def test_translation_rolls_back_all_updates_when_any_target_disappears(monkeypat
     assert conn.execute("SELECT title_ko FROM scored_items WHERE raw_item_id = 1").fetchone()[0] is None
 
 
+def test_thesis_schema_uses_bounded_signal_indices_instead_of_title_literals() -> None:
+    schema = thesis_scout._thesis_schema({'signal "quoted"', "signal-b"})
+    properties = schema["schema"]["properties"]
+    assert set(properties) == {"market_read", "buy_theses", "avoid_theses"}
+    for direction in ("buy_theses", "avoid_theses"):
+        assert properties[direction]["minItems"] == 3
+        assert properties[direction]["maxItems"] == 7
+        thesis_item = properties[direction]["items"]
+        assert "direction" not in thesis_item["properties"]
+        driving = thesis_item["properties"]["driving_signals"]
+        assert driving["items"] == {"type": "integer", "minimum": 1, "maximum": 2}
+    original = thesis_scout.SCOUT_TOOL["input_schema"]["properties"]["theses"]["items"]["properties"]["driving_signals"]
+    assert original["items"]["type"] == "string"
+
+
+def test_thesis_payload_resolves_directions_and_signal_indices() -> None:
+    base = {"company": "C", "driving_signals": [2, 1]}
+    data = {
+        "market_read": "read",
+        "buy_theses": [base.copy() for _ in range(3)],
+        "avoid_theses": [{"company": "A", "driving_signals": [1]} for _ in range(3)],
+    }
+
+    market_read, theses = thesis_scout._resolve_thesis_payload(
+        data, ['signal "quoted"', "signal-b"]
+    )
+
+    assert market_read == "read"
+    assert [thesis["direction"] for thesis in theses] == ["buy"] * 3 + ["avoid"] * 3
+    assert theses[0]["driving_signals"] == ["signal-b", 'signal "quoted"']
+
+
+def test_thesis_signal_indices_resolve_to_exact_titles() -> None:
+    theses = [{"driving_signals": [2, 1]}]
+
+    resolved = thesis_scout._resolve_driving_signal_indices(
+        theses, ['signal "quoted"', "signal-b"]
+    )
+
+    assert resolved[0]["driving_signals"] == ["signal-b", 'signal "quoted"']
+    assert theses[0]["driving_signals"] == [2, 1]
+
+
+@pytest.mark.parametrize("title", ["", "x" * 501])
+def test_thesis_schema_rejects_titles_incompatible_with_evidence_enum(title: str) -> None:
+    with pytest.raises(llm.LLMConfigurationError, match="signal titles"):
+        thesis_scout._thesis_schema({"valid", title})
+
+
 def test_thesis_runtime_requires_both_directions_and_exact_unique_supplied_signals() -> None:
     def thesis(direction: str, number: int, driving: list[str]) -> dict:
         return {"direction": direction, "company": f"C{number}", "ticker": f"T{number}",

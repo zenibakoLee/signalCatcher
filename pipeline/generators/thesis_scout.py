@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import json
 import logging
+from copy import deepcopy
 from datetime import datetime, timedelta
 
 from pipeline import llm
@@ -123,6 +124,65 @@ SCOUT_TOOL = {
 }
 
 
+def _thesis_schema(supplied_titles) -> dict:
+    titles = list(supplied_titles)
+    if not titles or any(
+        not isinstance(title, str) or not (1 <= len(title) <= 500)
+        for title in titles
+    ):
+        raise llm.LLMConfigurationError(
+            "supplied signal titles must be non-empty strings of at most 500 characters"
+        )
+    base_schema = SCOUT_TOOL["input_schema"]
+    thesis_item = deepcopy(base_schema["properties"]["theses"]["items"])
+    thesis_item["properties"].pop("direction")
+    thesis_item["required"].remove("direction")
+    driving = thesis_item["properties"]["driving_signals"]
+    driving["items"] = {"type": "integer", "minimum": 1, "maximum": len(titles)}
+    driving["description"] = "근거가 된 시그널의 1-based 번호 1-3개"
+    schema = {
+        "type": "object",
+        "properties": {
+            "market_read": deepcopy(base_schema["properties"]["market_read"]),
+            "buy_theses": {
+                "type": "array", "minItems": 3, "maxItems": 7,
+                "items": deepcopy(thesis_item),
+            },
+            "avoid_theses": {
+                "type": "array", "minItems": 3, "maxItems": 7,
+                "items": deepcopy(thesis_item),
+            },
+        },
+        "required": ["market_read", "buy_theses", "avoid_theses"],
+        "additionalProperties": False,
+    }
+    return {"name": "investment_theses", "schema": schema}
+
+
+def _resolve_driving_signal_indices(theses: list[dict], supplied_titles: list[str]) -> list[dict]:
+    resolved = deepcopy(theses)
+    for thesis in resolved:
+        indices = thesis["driving_signals"]
+        if (
+            len(indices) != len(set(indices))
+            or any(not isinstance(index, int) or isinstance(index, bool) for index in indices)
+            or any(index < 1 or index > len(supplied_titles) for index in indices)
+        ):
+            raise llm.LLMParseError("driving signal indices must be unique and in range")
+        thesis["driving_signals"] = [supplied_titles[index - 1] for index in indices]
+    return resolved
+
+
+def _resolve_thesis_payload(data: dict, supplied_titles: list[str]) -> tuple[str, list[dict]]:
+    theses: list[dict] = []
+    for direction, key in (("buy", "buy_theses"), ("avoid", "avoid_theses")):
+        for raw_thesis in data[key]:
+            thesis = deepcopy(raw_thesis)
+            thesis["direction"] = direction
+            theses.append(thesis)
+    return data["market_read"], _resolve_driving_signal_indices(theses, supplied_titles)
+
+
 def run_thesis_scout(window_days: int = 7, *, run_id: str | int) -> list[dict]:
     conn = get_connection()
     signals, digest = _gather_signals(conn, window_days)
@@ -130,10 +190,11 @@ def run_thesis_scout(window_days: int = 7, *, run_id: str | int) -> list[dict]:
         logger.info("Thesis scout: too few strong signals (%d) — skipping", len(signals))
         return []
 
+    signal_titles = [signal["title"] for signal in signals]
     signal_block = "\n".join(
-        f'- [{s["score"]}|{s["source"]}|{s["category"]}] {s["title"]}'
+        f'- [signal {index}|{s["score"]}|{s["source"]}|{s["category"]}] {s["title"]}'
         f'\n  근거: {(s["score_reasoning"] or "")[:140]}'
-        for s in signals
+        for index, s in enumerate(signals, start=1)
     )
     digest_block = ""
     if digest:
@@ -155,20 +216,20 @@ def run_thesis_scout(window_days: int = 7, *, run_id: str | int) -> list[dict]:
         model=MODEL,
         workload="investment_thesis_scout",
         run_id=run_id,
-        output_schema={"name": "investment_theses", "schema": SCOUT_TOOL["input_schema"]},
+        output_schema=_thesis_schema(signal_titles),
     )
     data = result.parsed
-    if not data or not data.get("theses"):
+    if not data:
         logger.warning("Thesis scout: no theses returned")
         return []
-    _validate_theses(data["theses"], {signal["title"] for signal in signals})
+    market_read, theses = _resolve_thesis_payload(data, signal_titles)
+    _validate_theses(theses, set(signal_titles))
 
     thesis_date = datetime.now().strftime("%Y-%m-%d")
-    market_read = data.get("market_read", "")
     saved = []
     try:
         conn.execute("BEGIN")
-        for t in data["theses"]:
+        for t in theses:
             conn.execute(
                 """INSERT INTO investment_theses
                    (thesis_date, direction, company, ticker, market, bottleneck, reasoning,
