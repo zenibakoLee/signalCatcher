@@ -36,7 +36,7 @@ def test_credentials_return_empty_on_keychain_failure_without_logging_output(mon
         assert toss_api._credentials(run=fake_run) == ("", "")
 
     assert calls == [
-        (["security", "find-generic-password", "-s", "toss-api-clinetId", "-w"], {
+        (["security", "find-generic-password", "-s", "toss-api-clientId", "-w"], {
             "capture_output": True, "check": False, "text": True, "timeout": 3,
         }),
         (["security", "find-generic-password", "-s", "toss-api-clientSecret", "-w"], {

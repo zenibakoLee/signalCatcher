@@ -31,7 +31,7 @@ _token_expires_at: float = 0.0
 
 
 _KEYCHAIN_SERVICES = {
-    "TOSS_API_KEY": "toss-api-clinetId",
+    "TOSS_API_KEY": "toss-api-clientId",
     "TOSS_SECRET_KEY": "toss-api-clientSecret",
 }
 
