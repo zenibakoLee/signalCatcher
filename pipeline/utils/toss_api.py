@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import logging
 import os
+import subprocess
 import threading
 import time
 from datetime import date
@@ -29,8 +30,37 @@ _token: str | None = None
 _token_expires_at: float = 0.0
 
 
-def _credentials() -> tuple[str, str]:
-    return os.environ.get("TOSS_API_KEY", ""), os.environ.get("TOSS_SECRET_KEY", "")
+_KEYCHAIN_SERVICES = {
+    "TOSS_API_KEY": "toss-api-clinetId",
+    "TOSS_SECRET_KEY": "toss-api-clientSecret",
+}
+
+
+def _keychain_credential(service: str, run=subprocess.run) -> str:
+    """Return a Keychain credential without exposing command output on failure."""
+    try:
+        result = run(
+            ["security", "find-generic-password", "-s", service, "-w"],
+            capture_output=True,
+            check=False,
+            text=True,
+            timeout=3,
+        )
+        if result.returncode == 0 and isinstance(result.stdout, str):
+            return result.stdout.strip()
+    except Exception:
+        pass
+    return ""
+
+
+def _credentials(run=subprocess.run) -> tuple[str, str]:
+    key = os.environ.get("TOSS_API_KEY", "")
+    secret = os.environ.get("TOSS_SECRET_KEY", "")
+    if not key:
+        key = _keychain_credential(_KEYCHAIN_SERVICES["TOSS_API_KEY"], run)
+    if not secret:
+        secret = _keychain_credential(_KEYCHAIN_SERVICES["TOSS_SECRET_KEY"], run)
+    return key, secret
 
 
 def available() -> bool:
