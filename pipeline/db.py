@@ -375,4 +375,55 @@ CREATE TABLE IF NOT EXISTS investment_theses (
 );
 CREATE INDEX IF NOT EXISTS idx_theses_date ON investment_theses(thesis_date DESC);
 CREATE INDEX IF NOT EXISTS idx_theses_direction ON investment_theses(direction);
+
+-- Preliminary v1 discovery output. Trend keywords are evidence-backed emerging
+-- signals until a future grouping system supplies strict theme membership proof.
+CREATE TABLE IF NOT EXISTS themes (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    theme_key TEXT NOT NULL UNIQUE,
+    label TEXT NOT NULL,
+    signal_kind TEXT NOT NULL CHECK(signal_kind IN ('emerging_signal', 'strict_theme')),
+    strict_grouping_evidence INTEGER NOT NULL DEFAULT 0 CHECK(strict_grouping_evidence IN (0, 1)),
+    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%S','now'))
+);
+
+CREATE TABLE IF NOT EXISTS theme_snapshots (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    theme_id INTEGER NOT NULL REFERENCES themes(id),
+    as_of TEXT NOT NULL,
+    pipeline_run_id INTEGER NOT NULL REFERENCES pipeline_runs(id),
+    feature_version TEXT NOT NULL,
+    status TEXT NOT NULL CHECK(status IN ('scored', 'insufficient_evidence')),
+    score REAL CHECK(score IS NULL OR score BETWEEN 0 AND 100),
+    rank INTEGER,
+    coverage TEXT NOT NULL,
+    feature_values TEXT NOT NULL,
+    evidence_raw_item_ids TEXT NOT NULL,
+    evidence_sources TEXT NOT NULL,
+    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%S','now')),
+    UNIQUE(theme_id, as_of, pipeline_run_id, feature_version)
+);
+CREATE INDEX IF NOT EXISTS idx_theme_snapshots_as_of ON theme_snapshots(as_of DESC);
+
+CREATE TABLE IF NOT EXISTS candidate_snapshots (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    ticker TEXT NOT NULL,
+    market TEXT NOT NULL,
+    hypothesis_category TEXT CHECK(hypothesis_category IN ('buy', 'avoid')),
+    thesis_id INTEGER REFERENCES investment_theses(id),
+    company_analysis_id INTEGER REFERENCES company_analyses(id),
+    as_of TEXT NOT NULL,
+    pipeline_run_id INTEGER NOT NULL REFERENCES pipeline_runs(id),
+    feature_version TEXT NOT NULL,
+    status TEXT NOT NULL CHECK(status IN ('scored', 'insufficient_evidence', 'unverified_us_listing', 'ineligible_market')),
+    score REAL CHECK(score IS NULL OR score BETWEEN 0 AND 100),
+    rank INTEGER,
+    coverage TEXT NOT NULL,
+    feature_values TEXT NOT NULL,
+    evidence_raw_item_ids TEXT NOT NULL,
+    evidence_sources TEXT NOT NULL,
+    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%S','now')),
+    UNIQUE(ticker, as_of, pipeline_run_id, feature_version)
+);
+CREATE INDEX IF NOT EXISTS idx_candidate_snapshots_as_of_rank ON candidate_snapshots(as_of DESC, rank ASC);
 """

@@ -12,6 +12,7 @@ from dotenv import load_dotenv
 
 from pipeline.db import (
     complete_pipeline_run,
+    get_connection,
     get_keyword_categories,
     init_db,
     load_keywords_from_yaml,
@@ -29,6 +30,13 @@ CONFIG_DIR = Path(__file__).resolve().parent.parent / "config"
 def _load_sources_config() -> dict:
     with open(CONFIG_DIR / "sources.yaml") as f:
         return yaml.safe_load(f)
+
+
+def write_current_discovery_snapshots(run_id: int) -> dict[str, int]:
+    """Persist preliminary discovery output only after daily upstream work succeeds."""
+    from pipeline.processing.discovery_snapshots import write_discovery_snapshots
+
+    return write_discovery_snapshots(get_connection(), pipeline_run_id=run_id)
 
 
 async def _collect_all(keywords: list[str], since: datetime) -> tuple[list, list[str]]:
@@ -183,6 +191,13 @@ def daily(hours: int):
             from pipeline.delivery.discord_webhook import deliver_investment_theses
             deliver_investment_theses(theses)
             logger.info("Thesis scout: %d theses generated", len(theses))
+
+        snapshot_counts = write_current_discovery_snapshots(run_id)
+        logger.info(
+            "Discovery snapshots: %d emerging signals, %d candidate records",
+            snapshot_counts["themes"],
+            snapshot_counts["candidates"],
+        )
 
         if errors:
             from pipeline.delivery.discord_webhook import deliver_collector_errors
