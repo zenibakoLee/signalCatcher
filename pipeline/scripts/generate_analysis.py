@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import sys
+import uuid
 from datetime import datetime, timedelta, timezone
 
 from dotenv import load_dotenv
@@ -85,7 +86,7 @@ def main() -> None:
         "signals": sorted(signals, key=lambda s: s["published_at"], reverse=True),
     }
 
-    data = generate_analysis(candidate)
+    data = generate_analysis(candidate, run_id=f"company-analysis-{uuid.uuid4()}")
     if data:
         json.dump({"success": True, "ticker": ticker}, sys.stdout, ensure_ascii=False)
     else:

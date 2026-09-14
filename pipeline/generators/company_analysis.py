@@ -7,22 +7,26 @@ from datetime import date, datetime, timedelta, timezone
 from html import unescape
 from urllib.parse import quote_plus
 
-import anthropic
 import httpx
 
+from pipeline import llm
 from pipeline.db import get_connection
 
 
-def _price_context(ticker: str) -> str:
+def _price_context(ticker: str, *, conn=None) -> str:
     """Real-time quote + 5-day move from Toss Securities (empty string on failure)."""
     try:
         from pipeline.utils import toss_api
         if not toss_api.available():
             return ""
+        if conn is None:
+            conn = get_connection()
+        llm.require_no_business_transaction(conn)
         quote = toss_api.get_prices([ticker]).get(ticker)
         if not quote:
             return ""
         line = f"현재가: {quote['price']:,.2f} {quote['currency']} (토스증권, {quote['timestamp'][:10]})"
+        llm.require_no_business_transaction(conn)
         candles = toss_api.get_candles(ticker, interval="1d", count=6)
         closes = [float(c.get("closePrice", 0)) for c in candles if c.get("closePrice")]
         if len(closes) >= 2 and closes[0]:
@@ -30,13 +34,15 @@ def _price_context(ticker: str) -> str:
             change = (closes[0] / closes[-1] - 1) * 100
             line += f", 최근 5거래일 {change:+.1f}%"
         return f"\n## 시장 데이터\n{line}\n"
+    except llm.BusinessTransactionActiveError:
+        raise
     except Exception:
         logger.exception("price context failed for %s", ticker)
         return ""
 
 logger = logging.getLogger(__name__)
 
-MODEL = "claude-sonnet-4-6"
+MODEL = llm.TERRA_MODEL
 KST = timezone(timedelta(hours=9))
 WINDOW_DAYS = 30
 MIN_SIGNALS = 3
@@ -48,7 +54,7 @@ TICKER_ALIASES: dict[str, str] = {
     "ALPHABET": "GOOGL",
     "FB": "META",
     "FACEBOOK": "META",
-    "ANTH": "ANTHROPIC",
+
     "TSM": "TSMC",
 }
 
@@ -171,7 +177,7 @@ _KNOWN_NAMES: dict[str, str] = {
 }
 
 
-def _fetch_news(ticker: str, max_results: int = 15) -> list[dict]:
+def _fetch_news(ticker: str, max_results: int = 15, *, conn=None) -> list[dict]:
     name = _KNOWN_NAMES.get(ticker, ticker)
     queries = [
         f"{name} stock earnings strategy 2026",
@@ -187,6 +193,9 @@ def _fetch_news(ticker: str, max_results: int = 15) -> list[dict]:
         for query in queries:
             try:
                 url = f"https://news.google.com/rss/search?q={quote_plus(query)}&hl=en-US&gl=US&ceid=US:en"
+                if conn is None:
+                    conn = get_connection()
+                llm.require_no_business_transaction(conn)
                 resp = client.get(url, headers={"User-Agent": "Mozilla/5.0"})
                 resp.raise_for_status()
                 root = ET.fromstring(resp.text)
@@ -219,6 +228,8 @@ def _fetch_news(ticker: str, max_results: int = 15) -> list[dict]:
 
                     if len(articles) >= max_results:
                         break
+            except llm.BusinessTransactionActiveError:
+                raise
             except Exception:
                 logger.debug("News fetch failed for query: %s", query)
 
@@ -229,11 +240,16 @@ def _fetch_news(ticker: str, max_results: int = 15) -> list[dict]:
     return articles[:max_results]
 
 
-def generate_analysis(candidate: dict) -> dict | None:
+def generate_analysis(
+    candidate: dict, *, run_id: str | int, conn=None, commit: bool = True, persist: bool = True
+) -> dict:
+    if conn is None:
+        conn = get_connection()
     ticker = candidate["ticker"]
     signals = candidate["signals"]
 
-    web_articles = _fetch_news(ticker)
+    llm.require_no_business_transaction(conn)
+    web_articles = _fetch_news(ticker, conn=conn)
     web_block = ""
     if web_articles:
         web_lines = []
@@ -260,6 +276,8 @@ def generate_analysis(candidate: dict) -> dict | None:
         source_intro = f"**{ticker}**에 대한 기존 수집 시그널은 없습니다. 웹에서 수집한 최신 기사만을 기반으로 분석합니다."
         source_section = web_block.lstrip("\n") if web_block else "웹 검색 결과 없음"
 
+    llm.require_no_business_transaction(conn)
+    price_context = _price_context(ticker, conn=conn)
     prompt = f"""당신은 기술 투자 시그널 분석 전문가입니다.
 {source_intro}
 
@@ -279,7 +297,7 @@ def generate_analysis(candidate: dict) -> dict | None:
 
 ## 소셜 버즈
 Reddit 멘션: {candidate.get('buzz_mentions', 0)}회 (최근 7일)
-{_price_context(ticker)}
+{price_context}
 
 아래 JSON 형식으로 반환하세요:
 {{
@@ -317,20 +335,38 @@ Reddit 멘션: {candidate.get('buzz_mentions', 0)}회 (최근 7일)
 
 유효한 JSON만 반환하세요. 한국어로 작성하되 고유명사는 원어 유지."""
 
-    try:
-        client = anthropic.Anthropic()
-        response = client.messages.create(
-            model=MODEL,
-            max_tokens=4000,
-            messages=[{"role": "user", "content": prompt}],
-        )
-        text = response.content[0].text.strip()
-        data = _parse_json(text)
-    except Exception:
-        logger.exception("Company analysis failed for %s", ticker)
-        return None
+    llm.require_no_business_transaction(conn)
+    result = llm.get_boundary().complete(
+        instructions="Write a truthful Korean company momentum analysis using only supplied signals.",
+        input_text=prompt,
+        max_output_tokens=4000,
+        model=MODEL,
+        workload="company_analysis",
+        run_id=run_id,
+        output_schema=_analysis_schema(),
+    )
+    data = result.parsed
 
-    conn = get_connection()
+    if not persist:
+        return {**data, "_web_articles": web_articles}
+
+    try:
+        if commit:
+            conn.execute("BEGIN")
+        _persist_analysis(conn, candidate, data, web_articles)
+        if commit:
+            conn.commit()
+    except Exception:
+        if commit:
+            conn.rollback()
+        raise
+    logger.info("Company analysis saved for %s (momentum=%d)", ticker, data.get("momentum_score", 0))
+    return data
+
+
+def _persist_analysis(conn, candidate: dict, data: dict, web_articles: list[dict]) -> None:
+    ticker = candidate["ticker"]
+    signals = candidate["signals"]
     try:
         conn.execute(
             """INSERT INTO company_analyses
@@ -367,48 +403,73 @@ Reddit 멘션: {candidate.get('buzz_mentions', 0)}회 (최근 7일)
                 MODEL,
             ),
         )
-        conn.commit()
-        logger.info("Company analysis saved for %s (momentum=%d)", ticker, data.get("momentum_score", 0))
     except Exception:
         logger.exception("Failed to save analysis for %s", ticker)
-        conn.rollback()
-        return None
-
-    return data
+        raise
 
 
-def run_company_analyses() -> list[dict]:
+def _closed_object(properties: dict) -> dict:
+    return {
+        "type": "object", "properties": properties,
+        "required": list(properties), "additionalProperties": False,
+    }
+
+
+def _analysis_schema() -> dict:
+    question = _closed_object({
+        "question": {"type": "string", "minLength": 1},
+        "answer": {"type": "string", "enum": ["yes", "partial", "no", "unknown"]},
+        "evidence": {"type": "string", "minLength": 1},
+    })
+    return llm.strict_object_schema("company_analysis", {
+        "company_name": {"type": "string", "minLength": 1},
+        "market": {"type": "string", "enum": ["US", "KR"]},
+        "momentum_score": {"type": "integer", "minimum": 0, "maximum": 100},
+        "verdict": {"type": "string", "enum": ["강한 모멘텀", "관심 관찰", "모멘텀 약화", "경고"]},
+        "verdict_summary": {"type": "string", "minLength": 1},
+        "five_questions": {"type": "array", "minItems": 5, "maxItems": 5, "items": question},
+        "fake_or_real": _closed_object({
+            "judgment": {"type": "string", "enum": ["real", "fake", "mixed", "too_early"]},
+            "reasoning": {"type": "string", "minLength": 1},
+        }),
+        "signal_timeline": {"type": "array", "maxItems": 20, "items": _closed_object({
+            "date": {"type": "string", "minLength": 10, "maxLength": 10},
+            "event": {"type": "string", "minLength": 1},
+            "significance": {"type": "string", "minLength": 1},
+        })},
+        "risk_factors": {"type": "array", "maxItems": 20, "items": _closed_object({
+            "factor": {"type": "string", "minLength": 1},
+            "severity": {"type": "string", "enum": ["high", "medium", "low"]},
+        })},
+        "action_note": {"type": "string", "minLength": 1},
+    })
+
+
+def run_company_analyses(*, run_id: str | int) -> list[dict]:
     candidates = find_momentum_candidates()
     if not candidates:
         logger.info("Company analysis: no candidates found")
         return []
 
     logger.info("Company analysis: %d candidates found", len(candidates))
-    results = []
+    conn = get_connection()
+    staged = []
     for cand in candidates:
         logger.info(
             "Analyzing %s (%d signals, avg_score=%.1f, buzz=%d)",
             cand["ticker"], cand["signal_count"], cand["avg_score"], cand["buzz_mentions"],
         )
-        data = generate_analysis(cand)
-        if data:
-            results.append({"ticker": cand["ticker"], **data})
-    return results
-
-
-def _parse_json(text: str) -> dict:
-    text = text.strip()
-    if text.startswith("```"):
-        lines = text.split("\n")
-        text = "\n".join(lines[1:-1] if lines[-1].strip() == "```" else lines[1:])
+        data = generate_analysis(cand, run_id=run_id, conn=conn, persist=False)
+        staged.append((cand, data))
+    results = []
     try:
-        return json.loads(text)
-    except json.JSONDecodeError:
-        start = text.find("{")
-        end = text.rfind("}")
-        if start != -1 and end != -1:
-            try:
-                return json.loads(text[start : end + 1])
-            except json.JSONDecodeError:
-                pass
+        conn.execute("BEGIN")
+        for cand, data in staged:
+            web_articles = data.pop("_web_articles")
+            _persist_analysis(conn, cand, data, web_articles)
+            results.append({"ticker": cand["ticker"], **data})
+        conn.commit()
+        return results
+    except Exception:
+        conn.rollback()
         raise

@@ -3,26 +3,26 @@ from __future__ import annotations
 import json
 import logging
 from pathlib import Path
+from typing import Any
 
-import anthropic
-
+from pipeline import llm
 from pipeline.db import get_connection
 
 logger = logging.getLogger(__name__)
 
 CONFIG_DIR = Path(__file__).resolve().parent.parent.parent / "config"
-BATCH_SIZE = 20  # 배치 확대 → 시스템 프롬프트 재전송·호출수 절반
-MODEL = "claude-haiku-4-5-20251001"
+BATCH_SIZE = 20
+MAX_SCORED_ITEMS_PER_RUN = 400
+MODEL = llm.MODEL
 
 
 def _load_scoring_prompt() -> str:
     return (CONFIG_DIR / "scoring_prompt.txt").read_text()
 
 
-def score_items(item_ids: list[int]) -> int:
+def score_items(item_ids: list[int], *, run_id: str | int) -> int:
     if not item_ids:
         return 0
-
     conn = get_connection()
     already_scored = {
         r["raw_item_id"]
@@ -31,31 +31,49 @@ def score_items(item_ids: list[int]) -> int:
             item_ids,
         ).fetchall()
     }
-    to_score = [i for i in item_ids if i not in already_scored]
+    to_score = [item_id for item_id in item_ids if item_id not in already_scored]
+    if len(to_score) > MAX_SCORED_ITEMS_PER_RUN:
+        raise llm.RequestLimitExceededError(
+            f"scoring run has {len(to_score)} items; cap is {MAX_SCORED_ITEMS_PER_RUN}"
+        )
     if not to_score:
         logger.info("Scorer: all %d items already scored", len(item_ids))
         return 0
-
     rows = conn.execute(
         f"""SELECT id, source, title, url, content_snippet, metadata
             FROM raw_items WHERE id IN ({','.join('?' for _ in to_score)})""",
         to_score,
     ).fetchall()
-
     system_prompt = _load_scoring_prompt()
-    client = anthropic.Anthropic()
-    scored_count = 0
-
+    staged: list[tuple[Any, dict]] = []
     for batch_start in range(0, len(rows), BATCH_SIZE):
         batch = rows[batch_start : batch_start + BATCH_SIZE]
-        scored_count += _score_batch(conn, client, system_prompt, batch)
-
+        staged.extend(_score_batch(system_prompt, batch, conn=conn, run_id=run_id))
+    scored_count = 0
+    try:
+        conn.execute("BEGIN")
+        for row, score_entry in staged:
+            score = _apply_source_penalty(row, score_entry["score"])
+            tickers = score_entry["related_tickers"]
+            cursor = conn.execute(
+                """INSERT OR IGNORE INTO scored_items
+                   (raw_item_id, score, score_reasoning, category, title_ko, related_tickers, model_used)
+                   VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                (row["id"], score, score_entry["reasoning"], score_entry["category"],
+                 score_entry["title_ko"], json.dumps(tickers, ensure_ascii=False) if tickers else None, MODEL),
+            )
+            if cursor.rowcount != 1:
+                raise llm.LLMOutputError("scorer insert did not insert exactly one staged row")
+            scored_count += 1
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
     logger.info("Scorer: %d items scored", scored_count)
     return scored_count
 
 
 def _format_buzz(metadata_json: str | None) -> str:
-    """Community engagement markers for the scoring prompt (buzz = 선행 신호)."""
     try:
         meta = json.loads(metadata_json or "{}")
     except (json.JSONDecodeError, TypeError):
@@ -69,106 +87,66 @@ def _format_buzz(metadata_json: str | None) -> str:
 
 
 def _score_batch(
-    conn,
-    client: anthropic.Anthropic,
-    system_prompt: str,
-    batch: list,
-) -> int:
+    system_prompt: str, batch: list[Any], *, conn=None, run_id: str | int
+) -> list[tuple[Any, dict]]:
     items_text = []
-    for i, row in enumerate(batch, 1):
+    for index, row in enumerate(batch, 1):
         snippet = (row["content_snippet"] or "")[:2000]
-        buzz = _format_buzz(row["metadata"])
-        items_text.append(f'{i}. [{row["source"].upper()}]{buzz} "{row["title"]}" — {snippet}')
-
+        items_text.append(f'{index}. [{row["source"].upper()}]{_format_buzz(row["metadata"])} "{row["title"]}" — {snippet}')
     user_message = (
-        "Score these items. Return ONLY a JSON array, no other text:\n\n"
+        "Score these items. Return ONLY a JSON object, no other text:\n\n"
         + "\n".join(items_text)
-        + '\n\nReturn: [{"index": 1, "score": 85, "reasoning": "...", "category": "...", "title_ko": "...", "related_tickers": ["NVDA", "삼성전자"]}, ...]'
+        + '\n\nReturn: {"scores": [{"index": 1, "score": 85, "reasoning": "...", "category": "...", "title_ko": "...", "related_tickers": ["NVDA", "삼성전자"]}, ...]}'
         + "\n\ntitle_ko: 기술 비전공자도 이해할 수 있게 번역하세요. 전문 용어 대신 쉬운 표현을 쓰세요. 고유명사(회사명, 제품명)는 원어 유지."
-        + "\n예: 'KV Cache Editability' → 'AI 모델 운영 비용을 줄이는 새 기술'"
     )
-
-    try:
-        response = client.messages.create(
-            model=MODEL,
-            max_tokens=8000,  # 배치20 수용 (출력 토큰은 실제 생성분만 과금)
-            # 프롬프트 캐싱: Haiku 최소 캐시 프리픽스는 4096토큰이라 현재 프롬프트(~1,700)는
-            # 캐시가 붙지 않음(무해·무비용). 프롬프트가 커지면 자동 적용되도록 남겨둠.
-            system=[{"type": "text", "text": system_prompt, "cache_control": {"type": "ephemeral"}}],
-            messages=[{"role": "user", "content": user_message}],
-        )
-        text = response.content[0].text.strip()
-        scores = _parse_scores(text)
-        if not scores:
-            raise ValueError("Empty scores from LLM response")
-    except Exception:
-        logger.exception("Scorer: LLM call failed for batch, using fallback scores")
-        scores = [
-            {"index": i, "score": 50, "reasoning": "Auto-scored: LLM unavailable", "category": "trend", "title_ko": None, "related_tickers": []}
-            for i in range(1, len(batch) + 1)
-        ]
-
-    count = 0
-    for score_entry in scores:
-        idx = score_entry.get("index", 0) - 1
-        if idx < 0 or idx >= len(batch):
-            continue
-
-        row = batch[idx]
-        score = max(0, min(100, score_entry.get("score", 50)))
-        score = _apply_source_penalty(row, score)
-        tickers = score_entry.get("related_tickers") or []
-        tickers_json = json.dumps(tickers, ensure_ascii=False) if tickers else None
-        try:
-            conn.execute(
-                """INSERT OR IGNORE INTO scored_items
-                   (raw_item_id, score, score_reasoning, category, title_ko, related_tickers, model_used)
-                   VALUES (?, ?, ?, ?, ?, ?, ?)""",
-                (
-                    row["id"],
-                    score,
-                    score_entry.get("reasoning", ""),
-                    score_entry.get("category", "trend"),
-                    score_entry.get("title_ko"),
-                    tickers_json,
-                    MODEL,
-                ),
-            )
-            count += 1
-        except Exception:
-            logger.exception("Scorer: failed to insert score for item %d", row["id"])
-
-    conn.commit()
-    return count
+    if conn is None:
+        conn = get_connection()
+    llm.require_no_business_transaction(conn)
+    result = llm.get_boundary().complete(
+        instructions=system_prompt,
+        input_text=user_message,
+        max_output_tokens=8000,
+        workload="scoring",
+        run_id=run_id,
+        output_schema=_score_schema(len(batch)),
+    )
+    scores = result.parsed["scores"]
+    indices = [entry["index"] for entry in scores]
+    if sorted(indices) != list(range(1, len(batch) + 1)):
+        raise llm.LLMParseError("scoring response indices must be unique and complete")
+    return [(batch[entry["index"] - 1], entry) for entry in scores]
 
 
-def _apply_source_penalty(row, score: int) -> int:
+def _apply_source_penalty(row: Any, score: int) -> int:
     if row["source"] != "youtube":
         return score
     try:
         meta = json.loads(row["metadata"] or "{}")
     except (json.JSONDecodeError, TypeError):
         return score
-    if meta.get("search_query"):
-        score = int(score * 0.75)
-    return score
+    return int(score * 0.75) if meta.get("search_query") else score
 
 
-def _parse_scores(text: str) -> list[dict]:
-    text = text.strip()
-    if text.startswith("```"):
-        lines = text.split("\n")
-        text = "\n".join(lines[1:-1] if lines[-1].strip() == "```" else lines[1:])
-
-    try:
-        return json.loads(text)
-    except json.JSONDecodeError:
-        start = text.find("[")
-        end = text.rfind("]")
-        if start != -1 and end != -1:
-            try:
-                return json.loads(text[start : end + 1])
-            except json.JSONDecodeError:
-                pass
-        logger.warning("Scorer: could not parse LLM response as JSON")
-        return []
+def _score_schema(batch_size: int) -> dict[str, Any]:
+    score_entry = {
+        "type": "object",
+        "properties": {
+            "index": {"type": "integer", "minimum": 1, "maximum": batch_size},
+            "score": {"type": "integer", "minimum": 0, "maximum": 100},
+            "reasoning": {"type": "string", "minLength": 1},
+            "category": {
+                "type": "string",
+                "enum": ["breakthrough", "trend", "product", "research", "infrastructure", "policy"],
+            },
+            "title_ko": {"type": "string", "minLength": 1},
+            "related_tickers": {
+                "type": "array", "maxItems": 3, "items": {"type": "string", "minLength": 1}
+            },
+        },
+        "required": ["index", "score", "reasoning", "category", "title_ko", "related_tickers"],
+        "additionalProperties": False,
+    }
+    return llm.strict_object_schema(
+        "scoring_results",
+        {"scores": {"type": "array", "minItems": batch_size, "maxItems": batch_size, "items": score_entry}},
+    )

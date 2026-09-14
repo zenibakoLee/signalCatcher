@@ -4,15 +4,15 @@ import json
 import logging
 from datetime import date, timedelta
 
-import anthropic
 import yaml
 
+from pipeline import llm
 from pipeline.db import get_connection
 
 logger = logging.getLogger(__name__)
 
-PRE_EVENT_MODEL = "claude-sonnet-4-6"
-POST_EVENT_MODEL = "claude-sonnet-4-6"
+PRE_EVENT_MODEL = llm.TERRA_MODEL
+POST_EVENT_MODEL = llm.TERRA_MODEL
 CONFIG_PATH = "config/conferences.yaml"
 
 
@@ -58,8 +58,11 @@ def get_actionable_conferences(target_date: date | None = None) -> dict[str, lis
     return result
 
 
-def generate_pre_event(conf: dict) -> dict | None:
-    conn = get_connection()
+def generate_pre_event(
+    conf: dict, *, run_id: str | int, conn=None, commit: bool = True, persist: bool = True
+) -> dict:
+    if conn is None:
+        conn = get_connection()
     name = conf["name"]
     organizer = conf.get("organizer", "")
     topics = conf.get("expected_topics", [])
@@ -97,28 +100,46 @@ JSON 형식으로 반환:
 
 유효한 JSON만 반환하세요."""
 
-    try:
-        client = anthropic.Anthropic()
-        response = client.messages.create(
-            model=PRE_EVENT_MODEL,
-            max_tokens=3000,
-            messages=[{"role": "user", "content": prompt}],
-        )
-        text = response.content[0].text.strip()
-        data = _parse_json(text)
-    except Exception:
-        logger.exception("Conference briefing: failed to generate pre-event for %s", name)
-        return None
+    llm.require_no_business_transaction(conn)
+    result = llm.get_boundary().complete(
+        instructions="Write a Korean pre-event investment briefing using only supplied signals.",
+        input_text=prompt,
+        max_output_tokens=3000,
+        model=PRE_EVENT_MODEL,
+        workload="conference_pre_event",
+        run_id=run_id,
+        output_schema=_pre_event_schema(),
+    )
+    data = result.parsed
 
     content_md = _format_pre_event_md(data, conf)
 
+    if not persist:
+        return data
+
+    try:
+        if commit:
+            conn.execute("BEGIN")
+        _persist_pre_event(conn, conf, data)
+        if commit:
+            conn.commit()
+    except Exception:
+        if commit:
+            conn.rollback()
+        raise
+    logger.info("Conference briefing: pre-event generated for %s", name)
+    return data
+
+
+def _persist_pre_event(conn, conf: dict, data: dict) -> None:
+    content_md = _format_pre_event_md(data, conf)
     conn.execute(
         """INSERT INTO conference_briefings
            (conference_name, conference_start, conference_end, briefing_type,
             content_md, expected_items, model_used)
            VALUES (?, ?, ?, 'pre_event', ?, ?, ?)""",
         (
-            name,
+            conf["name"],
             conf["start_date"],
             conf["end_date"],
             content_md,
@@ -126,14 +147,13 @@ JSON 형식으로 반환:
             PRE_EVENT_MODEL,
         ),
     )
-    conn.commit()
-
-    logger.info("Conference briefing: pre-event generated for %s", name)
-    return data
 
 
-def generate_post_event(conf: dict) -> dict | None:
-    conn = get_connection()
+def generate_post_event(
+    conf: dict, *, run_id: str | int, conn=None, commit: bool = True, persist: bool = True
+) -> dict:
+    if conn is None:
+        conn = get_connection()
     name = conf["name"]
     organizer = conf.get("organizer", "")
     search_terms = conf.get("search_terms", [])
@@ -195,31 +215,50 @@ JSON 형식으로 반환:
 
 유효한 JSON만 반환하세요."""
 
-    try:
-        client = anthropic.Anthropic()
-        response = client.messages.create(
-            model=POST_EVENT_MODEL,
-            max_tokens=4000,
-            messages=[{"role": "user", "content": prompt}],
-        )
-        text = response.content[0].text.strip()
-        data = _parse_json(text)
-    except Exception:
-        logger.exception("Conference briefing: failed to generate post-event for %s", name)
-        return None
+    llm.require_no_business_transaction(conn)
+    result = llm.get_boundary().complete(
+        instructions="Write a Korean post-event investment briefing using only supplied signals.",
+        input_text=prompt,
+        max_output_tokens=4000,
+        model=POST_EVENT_MODEL,
+        workload="conference_post_event",
+        run_id=run_id,
+        output_schema=_post_event_schema(),
+    )
+    data = result.parsed
 
     content_md = _format_post_event_md(data, conf)
     silent_signals = data.get("silent_signals", [])
 
     source_ids = _get_conference_item_ids(search_terms + topics, conf["start_date"], conf["end_date"])
 
+    if not persist:
+        return {**data, "_expected_items": expected_items, "_source_ids": source_ids}
+
+    try:
+        if commit:
+            conn.execute("BEGIN")
+        _persist_post_event(conn, conf, data, expected_items, source_ids)
+        if commit:
+            conn.commit()
+    except Exception:
+        if commit:
+            conn.rollback()
+        raise
+    logger.info("Conference briefing: post-event generated for %s", name)
+    return data
+
+
+def _persist_post_event(conn, conf: dict, data: dict, expected_items: list, source_ids: list) -> None:
+    content_md = _format_post_event_md(data, conf)
+    silent_signals = data.get("silent_signals", [])
     conn.execute(
         """INSERT INTO conference_briefings
            (conference_name, conference_start, conference_end, briefing_type,
             content_md, expected_items, silent_signals, source_item_ids, model_used)
            VALUES (?, ?, ?, 'post_event', ?, ?, ?, ?, ?)""",
         (
-            name,
+            conf["name"],
             conf["start_date"],
             conf["end_date"],
             content_md,
@@ -229,10 +268,6 @@ JSON 형식으로 반환:
             POST_EVENT_MODEL,
         ),
     )
-    conn.commit()
-
-    logger.info("Conference briefing: post-event generated for %s", name)
-    return data
 
 
 def _gather_recent_signals(terms: list[str], before_date: str) -> str:
@@ -319,6 +354,47 @@ def _get_conference_item_ids(terms: list[str], start_date: str, end_date: str) -
     return [r["id"] for r in rows]
 
 
+def _closed_object(properties: dict) -> dict:
+    return {
+        "type": "object", "properties": properties,
+        "required": list(properties), "additionalProperties": False,
+    }
+
+
+def _pre_event_schema() -> dict:
+    return llm.strict_object_schema("pre_event_briefing", {
+        "headline": {"type": "string", "minLength": 1, "maxLength": 80},
+        "summary": {"type": "string", "minLength": 1},
+        "expected_items": {
+            "type": "array", "minItems": 8, "maxItems": 12,
+            "items": _closed_object({
+                "item": {"type": "string", "minLength": 1},
+                "investment_relevance": {"type": "string", "enum": ["높음", "중간", "낮음"]},
+                "reasoning": {"type": "string", "minLength": 1},
+            }),
+        },
+        "watch_points": {"type": "string", "minLength": 1},
+    })
+
+
+def _post_event_schema() -> dict:
+    announcement = _closed_object({
+        "item": {"type": "string", "minLength": 1},
+        "significance": {"type": "string", "minLength": 1},
+    })
+    return llm.strict_object_schema("post_event_briefing", {
+        "headline": {"type": "string", "minLength": 1, "maxLength": 80},
+        "summary": {"type": "string", "minLength": 1},
+        "key_announcements": {"type": "array", "items": announcement},
+        "silent_signals": {"type": "array", "items": _closed_object({
+            "expected_item": {"type": "string", "minLength": 1},
+            "interpretation": {"type": "string", "minLength": 1},
+        })},
+        "surprises": {"type": "array", "items": announcement},
+        "investment_takeaway": {"type": "string", "minLength": 1},
+    })
+
+
 def _format_pre_event_md(data: dict, conf: dict) -> str:
     parts = [
         f"# 📋 사전 브리핑: {conf['name']}",
@@ -366,21 +442,3 @@ def _format_post_event_md(data: dict, conf: dict) -> str:
         parts.extend(["", "## 투자 시사점", data["investment_takeaway"]])
 
     return "\n".join(parts)
-
-
-def _parse_json(text: str) -> dict:
-    text = text.strip()
-    if text.startswith("```"):
-        lines = text.split("\n")
-        text = "\n".join(lines[1:-1] if lines[-1].strip() == "```" else lines[1:])
-    try:
-        return json.loads(text)
-    except json.JSONDecodeError:
-        start = text.find("{")
-        end = text.rfind("}")
-        if start != -1 and end != -1:
-            try:
-                return json.loads(text[start : end + 1])
-            except json.JSONDecodeError:
-                pass
-        raise

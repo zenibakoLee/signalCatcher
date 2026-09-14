@@ -5,14 +5,13 @@ import logging
 import statistics
 from datetime import date
 
-import anthropic
-
+from pipeline import llm
 from pipeline.db import get_connection, get_active_keywords
 from pipeline.models import TrendAlert
 
 logger = logging.getLogger(__name__)
 
-MODEL = "claude-haiku-4-5-20251001"
+MODEL = llm.LUNA_MODEL
 MIN_HISTORY_DAYS = 7
 NOTABLE_THRESHOLD = 2.0
 URGENT_THRESHOLD = 3.0
@@ -20,7 +19,7 @@ ACCELERATION_WEEKS = 4
 MIN_WEEKLY_AVG = 1.0
 
 
-def detect_trends(target_date: date | None = None) -> list[TrendAlert]:
+def detect_trends(target_date: date | None = None, *, run_id: str | int) -> list[TrendAlert]:
     if target_date is None:
         target_date = date.today()
     date_str = target_date.isoformat()
@@ -72,14 +71,46 @@ def detect_trends(target_date: date | None = None) -> list[TrendAlert]:
 
     accel_alerts = detect_long_term_acceleration(target_date)
     alerts.extend(accel_alerts)
+    alerts = _merge_alerts(alerts)
 
-    _store_alerts(conn, alerts)
-
-    if alerts:
-        _interpret_alerts(alerts)
+    interpretations = _interpret_alerts(alerts, conn=conn, run_id=run_id, persist=False) if alerts else {}
+    try:
+        conn.execute("BEGIN")
+        _store_alerts(conn, alerts)
+        for alert in alerts:
+            alert.llm_interpretation = interpretations[alert.keyword]
+            conn.execute(
+                "UPDATE trend_alerts SET llm_interpretation = ? WHERE keyword = ? AND alert_date = ?",
+                (alert.llm_interpretation, alert.keyword, alert.alert_date),
+            )
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
 
     logger.info("Trend detector: %d alerts (%d accel) for %s", len(alerts), len(accel_alerts), date_str)
     return alerts
+
+
+def _merge_alerts(alerts: list[TrendAlert]) -> list[TrendAlert]:
+    severity_rank = {"notable": 1, "accelerating": 2, "urgent": 3}
+    by_keyword: dict[str, TrendAlert] = {}
+    for alert in alerts:
+        current = by_keyword.get(alert.keyword)
+        candidate_key = (
+            severity_rank.get(alert.severity, 0), alert.z_score, alert.today_count,
+            alert.moving_avg_7d, alert.moving_avg_30d, alert.std_dev_30d,
+        )
+        if current is None:
+            by_keyword[alert.keyword] = alert
+            continue
+        current_key = (
+            severity_rank.get(current.severity, 0), current.z_score, current.today_count,
+            current.moving_avg_7d, current.moving_avg_30d, current.std_dev_30d,
+        )
+        if candidate_key > current_key:
+            by_keyword[alert.keyword] = alert
+    return [by_keyword[keyword] for keyword in sorted(by_keyword, key=lambda value: (value.casefold(), value))]
 
 
 def detect_long_term_acceleration(target_date: date | None = None) -> list[TrendAlert]:
@@ -177,11 +208,13 @@ def _store_alerts(conn, alerts: list[TrendAlert]) -> None:
                 alert.llm_interpretation,
             ),
         )
-    conn.commit()
 
 
-def _interpret_alerts(alerts: list[TrendAlert]) -> None:
-    conn = get_connection()
+def _interpret_alerts(
+    alerts: list[TrendAlert], conn=None, *, run_id: str | int, persist: bool = True
+) -> dict[str, str]:
+    if conn is None:
+        conn = get_connection()
 
     alert_lines = []
     for a in alerts:
@@ -205,30 +238,45 @@ def _interpret_alerts(alerts: list[TrendAlert]) -> None:
 
 {chr(10).join(alert_lines)}
 
-JSON 배열로 반환: [{{"keyword": "...", "interpretation": "한국어 해석 2문장"}}]
+JSON 객체로 반환: {{"interpretations": [{{"keyword": "...", "interpretation": "한국어 해석 2문장"}}]}}
 유효한 JSON만 반환하세요."""
 
-    try:
-        client = anthropic.Anthropic()
-        response = client.messages.create(
-            model=MODEL,
-            max_tokens=1500,
-            messages=[{"role": "user", "content": prompt}],
-        )
-        text = response.content[0].text.strip()
-        if text.startswith("```"):
-            lines = text.split("\n")
-            text = "\n".join(lines[1:-1] if lines[-1].strip() == "```" else lines[1:])
-        interpretations = json.loads(text)
-
-        interp_map = {i["keyword"]: i["interpretation"] for i in interpretations}
+    interpretation_entry = {
+        "type": "object",
+        "properties": {
+            "keyword": {"type": "string", "enum": [alert.keyword for alert in alerts]},
+            "interpretation": {"type": "string", "minLength": 1},
+        },
+        "required": ["keyword", "interpretation"],
+        "additionalProperties": False,
+    }
+    llm.require_no_business_transaction(conn)
+    result = llm.get_boundary().complete(
+        instructions="Interpret trend alerts accurately and concisely.",
+        input_text=prompt,
+        max_output_tokens=1500,
+        model=MODEL,
+        workload="trend_interpretation",
+        run_id=run_id,
+        output_schema=llm.strict_object_schema(
+            "trend_interpretations",
+            {
+                "interpretations": {
+                    "type": "array", "minItems": len(alerts), "maxItems": len(alerts),
+                    "items": interpretation_entry,
+                }
+            },
+        ),
+    )
+    interpretations = result.parsed["interpretations"]
+    interp_map = {entry["keyword"]: entry["interpretation"] for entry in interpretations}
+    if set(interp_map) != {alert.keyword for alert in alerts} or len(interp_map) != len(interpretations):
+        raise llm.LLMParseError("trend interpretations must cover each keyword exactly once")
+    if persist:
         for alert in alerts:
-            if alert.keyword in interp_map:
-                alert.llm_interpretation = interp_map[alert.keyword]
-                conn.execute(
-                    "UPDATE trend_alerts SET llm_interpretation = ? WHERE keyword = ? AND alert_date = ?",
-                    (alert.llm_interpretation, alert.keyword, alert.alert_date),
-                )
-        conn.commit()
-    except Exception:
-        logger.exception("Trend detector: failed to interpret alerts with LLM")
+            alert.llm_interpretation = interp_map[alert.keyword]
+            conn.execute(
+                "UPDATE trend_alerts SET llm_interpretation = ? WHERE keyword = ? AND alert_date = ?",
+                (alert.llm_interpretation, alert.keyword, alert.alert_date),
+            )
+    return interp_map

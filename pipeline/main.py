@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
+import uuid
 from datetime import datetime, timedelta
 from pathlib import Path
 
@@ -10,6 +11,7 @@ import click
 import yaml
 from dotenv import load_dotenv
 
+from pipeline import llm
 from pipeline.db import (
     complete_pipeline_run,
     get_connection,
@@ -148,7 +150,7 @@ def daily(hours: int):
 
         # Step 4.5: Auto-manage keywords (discover/spike/retire)
         from pipeline.generators.keyword_suggestions import auto_manage_keywords
-        kw_result = auto_manage_keywords()
+        kw_result = auto_manage_keywords(run_id=run_id)
         logger.info("Keyword management: %s", kw_result)
         if kw_result.get("added") or kw_result.get("spiked") or kw_result.get("resurged") or kw_result.get("retired"):
             from pipeline.delivery.discord_webhook import deliver_keyword_management
@@ -156,15 +158,15 @@ def daily(hours: int):
 
         # Step 5: Detect trends (z-score acceleration)
         from pipeline.processing.trend_detector import detect_trends
-        trend_alerts = detect_trends()
+        trend_alerts = detect_trends(run_id=run_id)
 
-        # Step 6: Score with Claude Haiku
+        # Step 6: Score bounded items with OpenAI Responses.
         from pipeline.processing.scorer import score_items
-        items_scored = score_items(new_ids)
+        items_scored = score_items(new_ids, run_id=run_id)
 
         # Step 7: Generate digest
         from pipeline.generators.daily_digest import generate_digest
-        digest_data = generate_digest()
+        digest_data = generate_digest(run_id=run_id)
 
         # Step 7.5: Generate comic for digest
         comic_path = None
@@ -186,7 +188,7 @@ def daily(hours: int):
 
         # Step 9: 시그널 기반 투자 대상 발굴 (2차적 추론 — 매수 발굴 + 회피/청산)
         from pipeline.generators.thesis_scout import run_thesis_scout
-        theses = run_thesis_scout()
+        theses = run_thesis_scout(run_id=run_id)
         if theses:
             from pipeline.delivery.discord_webhook import deliver_investment_theses
             deliver_investment_theses(theses)
@@ -311,27 +313,52 @@ def event(target_date: str | None):
         get_actionable_conferences,
         generate_pre_event,
         generate_post_event,
+        _persist_pre_event,
+        _persist_post_event,
     )
     from pipeline.delivery.discord_webhook import deliver_conference_briefing
 
     target = date_type.fromisoformat(target_date) if target_date else None
+    run_id = f"event-{uuid.uuid4()}"
     actionable = get_actionable_conferences(target)
 
     if not actionable["pre_event"] and not actionable["post_event"]:
         logger.info("Event pipeline: no conferences to process today")
         return
 
-    for conf in actionable["pre_event"]:
-        logger.info("Generating pre-event briefing for %s", conf["name"])
-        data = generate_pre_event(conf)
-        if data:
-            deliver_conference_briefing(data, conf, "pre_event")
+    MAX_CONFERENCE_BRIEFINGS_PER_RUN = 4
+    pre_event = actionable["pre_event"][:MAX_CONFERENCE_BRIEFINGS_PER_RUN]
+    post_event = actionable["post_event"][:MAX_CONFERENCE_BRIEFINGS_PER_RUN - len(pre_event)]
+    if len(pre_event) + len(post_event) < len(actionable["pre_event"]) + len(actionable["post_event"]):
+        raise llm.RequestLimitExceededError("conference briefing cap exceeded")
 
-    for conf in actionable["post_event"]:
+    conn = get_connection()
+    generated: list[tuple[dict, dict, str]] = []
+    for conf in pre_event:
+        logger.info("Generating pre-event briefing for %s", conf["name"])
+        data = generate_pre_event(conf, conn=conn, commit=False, run_id=run_id, persist=False)
+        generated.append((data, conf, "pre_event"))
+
+    for conf in post_event:
         logger.info("Generating post-event briefing for %s", conf["name"])
-        data = generate_post_event(conf)
-        if data:
-            deliver_conference_briefing(data, conf, "post_event")
+        data = generate_post_event(conf, conn=conn, commit=False, run_id=run_id, persist=False)
+        generated.append((data, conf, "post_event"))
+    try:
+        conn.execute("BEGIN")
+        for data, conf, briefing_type in generated:
+            if briefing_type == "pre_event":
+                _persist_pre_event(conn, conf, data)
+            else:
+                expected_items = data.pop("_expected_items")
+                source_ids = data.pop("_source_ids")
+                _persist_post_event(conn, conf, data, expected_items, source_ids)
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+
+    for data, conf, briefing_type in generated:
+        deliver_conference_briefing(data, conf, briefing_type)
 
 
 @cli.command("score-all")
@@ -357,7 +384,7 @@ def score_all(batch_limit: int):
         return
 
     logger.info("score-all: scoring %d items", len(ids))
-    scored = score_items(ids)
+    scored = score_items(ids, run_id=f"score-all-{uuid.uuid4()}")
     logger.info("score-all: %d items scored", scored)
 
 
@@ -384,52 +411,51 @@ def translate_titles(batch_limit: int):
 
     logger.info("translate-titles: %d items to translate", len(rows))
 
-    import anthropic
-    client = anthropic.Anthropic()
     batch_size = 30
     total = 0
-
+    run_id = f"translate-titles-{uuid.uuid4()}"
+    staged: list[tuple[object, dict]] = []
     for batch_start in range(0, len(rows), batch_size):
         batch = rows[batch_start : batch_start + batch_size]
-        titles_block = "\n".join(
-            f'{i+1}. "{row["title"]}"' for i, row in enumerate(batch)
-        )
-
+        titles_block = "\n".join(f'{i+1}. "{row["title"]}"' for i, row in enumerate(batch))
         prompt = (
-            f"아래 영어 제목들을 자연스러운 한국어로 번역하세요.\n"
-            f"고유명사(회사명, 제품명, 기술명)는 원어 그대로 유지하세요.\n\n"
+            "아래 영어 제목들을 자연스러운 한국어로 번역하세요.\n"
+            "고유명사(회사명, 제품명, 기술명)는 원어 그대로 유지하세요.\n\n"
             f"{titles_block}\n\n"
-            f'JSON 배열로 반환: [{{"index": 1, "title_ko": "번역된 제목"}}, ...]\n'
-            f"유효한 JSON만 반환하세요."
+            'JSON 객체로 반환: {"translations": [{"index": 1, "title_ko": "번역된 제목"}, ...]}\n'
+            "유효한 JSON만 반환하세요."
         )
-
-        try:
-            response = client.messages.create(
-                model="claude-haiku-4-5-20251001",
-                max_tokens=3000,
-                messages=[{"role": "user", "content": prompt}],
-            )
-            text = response.content[0].text.strip()
-            if text.startswith("```"):
-                lines = text.split("\n")
-                text = "\n".join(lines[1:-1] if lines[-1].strip() == "```" else lines[1:])
-
-            import json
-            translations = json.loads(text)
-
-            for entry in translations:
-                idx = entry.get("index", 0) - 1
-                title_ko = entry.get("title_ko")
-                if idx < 0 or idx >= len(batch) or not title_ko:
-                    continue
-                conn.execute(
-                    "UPDATE scored_items SET title_ko = ? WHERE id = ?",
-                    (title_ko, batch[idx]["id"]),
-                )
-                total += 1
-            conn.commit()
-        except Exception:
-            logger.exception("translate-titles: batch failed at offset %d", batch_start)
+        translation_entry = {
+            "type": "object", "properties": {
+                "index": {"type": "integer", "minimum": 1, "maximum": len(batch)},
+                "title_ko": {"type": "string", "minLength": 1},
+            }, "required": ["index", "title_ko"], "additionalProperties": False,
+        }
+        llm.require_no_business_transaction(conn)
+        result = llm.get_boundary().complete(
+            instructions="Translate titles faithfully into natural Korean.", input_text=prompt,
+            max_output_tokens=3000, model=llm.LUNA_MODEL, workload="title_translation",
+            run_id=run_id,
+            output_schema=llm.strict_object_schema("title_translations", {"translations": {
+                "type": "array", "minItems": len(batch), "maxItems": len(batch), "items": translation_entry,
+            }}),
+        )
+        translations = result.parsed["translations"]
+        if sorted(entry["index"] for entry in translations) != list(range(1, len(batch) + 1)):
+            raise llm.LLMParseError("translation indices must be unique and complete")
+        staged.extend((batch[entry["index"] - 1], entry) for entry in translations)
+    try:
+        conn.execute("BEGIN")
+        for row, entry in staged:
+            cursor = conn.execute("UPDATE scored_items SET title_ko = ? WHERE id = ?", (entry["title_ko"], row["id"]))
+            if cursor.rowcount != 1:
+                raise llm.LLMOutputError("title update did not update exactly one staged row")
+            total += 1
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        logger.exception("translate-titles: transaction failed")
+        raise
 
     logger.info("translate-titles: %d items translated", total)
 
@@ -439,7 +465,7 @@ def translate_titles(batch_limit: int):
 def scout(days: int):
     """Generate investment theses from the strongest recent signals (buy discovery + avoid/exit)."""
     from pipeline.generators.thesis_scout import run_thesis_scout
-    theses = run_thesis_scout(window_days=days)
+    theses = run_thesis_scout(window_days=days, run_id=f"scout-{uuid.uuid4()}")
     if theses:
         from pipeline.delivery.discord_webhook import deliver_investment_theses
         deliver_investment_theses(theses)

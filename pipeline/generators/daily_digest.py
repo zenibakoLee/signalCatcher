@@ -4,13 +4,12 @@ import json
 import logging
 from datetime import date, datetime, timedelta, timezone
 
-import anthropic
-
+from pipeline import llm
 from pipeline.db import get_connection
 
 logger = logging.getLogger(__name__)
 
-MODEL = "claude-haiku-4-5-20251001"
+MODEL = llm.TERRA_MODEL
 
 KST = timezone(timedelta(hours=9))
 
@@ -63,7 +62,7 @@ def _detect_topic_clusters(conn, hours: int = 72, min_count: int = 8) -> list[di
             gram_counts[g] += 1
             gram_titles.setdefault(g, []).append((row["score"] or 0, row["title"]))
 
-    # baseline: 이전 14일 — "code", "claude" 같은 상시 배경 토픽을 걸러내고
+    # baseline: 이전 14일의 상시 배경 토픽을 걸러내고
     # Kimi K3처럼 갑자기 등장한 급증 토픽만 남긴다
     base_rows = conn.execute(
         """SELECT title FROM raw_items
@@ -101,7 +100,7 @@ def _detect_topic_clusters(conn, hours: int = 72, min_count: int = 8) -> list[di
     return clusters
 
 
-def generate_digest(target_date: date | None = None) -> dict | None:
+def generate_digest(target_date: date | None = None, *, run_id: str | int) -> dict | None:
     if target_date is None:
         target_date = datetime.now(KST).date()
     date_str = target_date.isoformat()
@@ -213,43 +212,41 @@ def generate_digest(target_date: date | None = None) -> dict | None:
 
 유효한 JSON만 반환하세요."""
 
-    try:
-        client = anthropic.Anthropic()
-        response = client.messages.create(
-            model=MODEL,
-            max_tokens=3000,
-            messages=[{"role": "user", "content": prompt}],
-        )
-        text = response.content[0].text.strip()
-        digest_data = _parse_json(text)
-    except Exception:
-        logger.exception("Digest generation failed, creating minimal digest")
-        digest_data = {
-            "headline": f"시그널 다이제스트 — {date_str}",
-            "summary": f"{len(top_items)}개 항목 수집 완료. LLM 다이제스트 생성 실패.",
-            "top_items_commentary": [],
-            "trend_section": "",
-            "one_line_takeaway": "항목을 수동으로 검토하세요.",
-        }
+    llm.require_no_business_transaction(conn)
+    result = llm.get_boundary().complete(
+        instructions="Write a truthful Korean investment digest using only the supplied material.",
+        input_text=prompt,
+        max_output_tokens=3000,
+        model=MODEL,
+        workload="daily_digest",
+        run_id=run_id,
+        output_schema=_digest_schema(len(top_items)),
+    )
+    digest_data = result.parsed
 
     top_item_ids = [item["raw_item_id"] for item in top_items]
     alert_ids = [alert["keyword"] for alert in trend_alerts]
 
     summary_md = _format_markdown(digest_data)
 
-    conn.execute(
-        """INSERT INTO digests (digest_date, headline, summary_md, top_item_ids, trend_alert_ids, model_used)
-           VALUES (?, ?, ?, ?, ?, ?)""",
-        (
-            date_str,
-            digest_data.get("headline", f"Digest {date_str}"),
-            summary_md,
-            json.dumps(top_item_ids),
-            json.dumps(alert_ids),
-            MODEL,
-        ),
-    )
-    conn.commit()
+    try:
+        conn.execute("BEGIN")
+        conn.execute(
+            """INSERT INTO digests (digest_date, headline, summary_md, top_item_ids, trend_alert_ids, model_used)
+               VALUES (?, ?, ?, ?, ?, ?)""",
+            (
+                date_str,
+                digest_data.get("headline", f"Digest {date_str}"),
+                summary_md,
+                json.dumps(top_item_ids),
+                json.dumps(alert_ids),
+                MODEL,
+            ),
+        )
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
 
     logger.info("Digest: generated for %s with %d items", date_str, len(top_items))
     return digest_data
@@ -284,19 +281,25 @@ def _format_markdown(data: dict) -> str:
     return "\n".join(parts)
 
 
-def _parse_json(text: str) -> dict:
-    text = text.strip()
-    if text.startswith("```"):
-        lines = text.split("\n")
-        text = "\n".join(lines[1:-1] if lines[-1].strip() == "```" else lines[1:])
-    try:
-        return json.loads(text)
-    except json.JSONDecodeError:
-        start = text.find("{")
-        end = text.rfind("}")
-        if start != -1 and end != -1:
-            try:
-                return json.loads(text[start : end + 1])
-            except json.JSONDecodeError:
-                pass
-        raise
+def _digest_schema(item_count: int) -> dict:
+    commentary = {
+        "type": "object",
+        "properties": {
+            "title": {"type": "string", "minLength": 1},
+            "score": {"type": "integer", "minimum": 0, "maximum": 100},
+            "source": {"type": "string", "minLength": 1},
+            "url": {"type": "string"},
+            "commentary": {"type": "string", "minLength": 1},
+            "related_tickers": {"type": "array", "maxItems": 3, "items": {"type": "string", "minLength": 1}},
+        },
+        "required": ["title", "score", "source", "url", "commentary", "related_tickers"],
+        "additionalProperties": False,
+    }
+    return llm.strict_object_schema("daily_digest", {
+        "headline": {"type": "string", "minLength": 1, "maxLength": 80},
+        "summary": {"type": "string", "minLength": 1},
+        "top_items_commentary": {"type": "array", "minItems": 1, "maxItems": item_count, "items": commentary},
+        "trend_section": {"type": "string"},
+        "social_buzz_note": {"type": "string"},
+        "one_line_takeaway": {"type": "string", "minLength": 1},
+    })

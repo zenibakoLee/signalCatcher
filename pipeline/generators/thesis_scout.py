@@ -20,13 +20,12 @@ import json
 import logging
 from datetime import datetime, timedelta
 
-import anthropic
-
+from pipeline import llm
 from pipeline.db import get_connection
 
 logger = logging.getLogger(__name__)
 
-MODEL = "claude-sonnet-4-6"
+MODEL = llm.TERRA_MODEL
 SIGNAL_SCORE_FLOOR = 70
 MAX_SIGNALS = 25
 MAX_OUTPUT_TOKENS = 8000
@@ -96,6 +95,8 @@ SCOUT_TOOL = {
             "market_read": {"type": "string", "description": "현재 시그널들이 그리는 큰 그림 2-3문장 (한국어)"},
             "theses": {
                 "type": "array",
+                "minItems": 6,
+                "maxItems": 14,
                 "items": {
                     "type": "object",
                     "properties": {
@@ -109,18 +110,20 @@ SCOUT_TOOL = {
                         "pricing_status": {"type": "string", "enum": ["unpriced", "partial", "mostly", "overpriced"], "description": "주가 반영 정도"},
                         "conviction": {"type": "string", "enum": ["high", "medium", "low"]},
                         "falsifier": {"type": "string", "description": "이 논리가 틀렸음을 알 수 있는 조건 (한국어)"},
-                        "driving_signals": {"type": "array", "items": {"type": "string"}, "description": "근거가 된 시그널 제목/요지 1-3개"},
+                        "driving_signals": {"type": "array", "minItems": 1, "maxItems": 3, "items": {"type": "string", "minLength": 1}, "description": "근거가 된 시그널 제목 1-3개"},
                     },
-                    "required": ["direction", "company", "market", "bottleneck", "reasoning", "pricing_status", "conviction", "falsifier", "driving_signals"],
+                    "required": ["direction", "company", "ticker", "market", "bottleneck", "reasoning", "depth_layer", "pricing_status", "conviction", "falsifier", "driving_signals"],
+                    "additionalProperties": False,
                 },
             },
         },
         "required": ["market_read", "theses"],
+        "additionalProperties": False,
     },
 }
 
 
-def run_thesis_scout(window_days: int = 7) -> list[dict]:
+def run_thesis_scout(window_days: int = 7, *, run_id: str | int) -> list[dict]:
     conn = get_connection()
     signals, digest = _gather_signals(conn, window_days)
     if len(signals) < 5:
@@ -144,48 +147,70 @@ def run_thesis_scout(window_days: int = 7) -> list[dict]:
         "병목에 집중하세요. 확신 있는 것만, 각 3-7개 이내."
     )
 
-    try:
-        client = anthropic.Anthropic()
-        resp = client.messages.create(
-            model=MODEL,
-            max_tokens=MAX_OUTPUT_TOKENS,
-            system=SCOUT_SYSTEM,
-            messages=[{"role": "user", "content": user_msg}],
-            tools=[SCOUT_TOOL],
-            tool_choice={"type": "tool", "name": "investment_theses"},
-        )
-    except Exception:
-        logger.exception("Thesis scout: LLM call failed")
-        return []
-
-    data = None
-    for block in resp.content:
-        if block.type == "tool_use":
-            data = block.input
-            break
+    llm.require_no_business_transaction(conn)
+    result = llm.get_boundary().complete(
+        instructions=SCOUT_SYSTEM,
+        input_text=user_msg + "\n\nReturn the investment_theses object as valid JSON.",
+        max_output_tokens=MAX_OUTPUT_TOKENS,
+        model=MODEL,
+        workload="investment_thesis_scout",
+        run_id=run_id,
+        output_schema={"name": "investment_theses", "schema": SCOUT_TOOL["input_schema"]},
+    )
+    data = result.parsed
     if not data or not data.get("theses"):
         logger.warning("Thesis scout: no theses returned")
         return []
+    _validate_theses(data["theses"], {signal["title"] for signal in signals})
 
     thesis_date = datetime.now().strftime("%Y-%m-%d")
     market_read = data.get("market_read", "")
     saved = []
-    for t in data["theses"]:
-        conn.execute(
-            """INSERT INTO investment_theses
-               (thesis_date, direction, company, ticker, market, bottleneck, reasoning,
-                depth_layer, pricing_status, conviction, falsifier, driving_signals, model_used)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-            (
-                thesis_date, t.get("direction", "buy"), t.get("company", ""),
-                t.get("ticker", ""), t.get("market", ""), t.get("bottleneck", ""),
-                t.get("reasoning", ""), t.get("depth_layer"), t.get("pricing_status", ""),
-                t.get("conviction", "medium"),
-                t.get("falsifier", ""), json.dumps(t.get("driving_signals", []), ensure_ascii=False),
-                MODEL,
-            ),
-        )
-        saved.append(t)
-    conn.commit()
+    try:
+        conn.execute("BEGIN")
+        for t in data["theses"]:
+            conn.execute(
+                """INSERT INTO investment_theses
+                   (thesis_date, direction, company, ticker, market, bottleneck, reasoning,
+                    depth_layer, pricing_status, conviction, falsifier, driving_signals, model_used)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (
+                    thesis_date, t["direction"], t["company"],
+                    t["ticker"], t["market"], t["bottleneck"],
+                    t["reasoning"], t["depth_layer"], t["pricing_status"],
+                    t["conviction"], t["falsifier"],
+                    json.dumps(t["driving_signals"], ensure_ascii=False), MODEL,
+                ),
+            )
+            saved.append(t)
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
     logger.info("Thesis scout: %d theses saved (%s)", len(saved), thesis_date)
     return [{"market_read": market_read, **t} for t in saved]
+
+
+def _validate_theses(theses: list[dict], supplied_titles: set[str]) -> None:
+    directions = [thesis["direction"] for thesis in theses]
+    if not (3 <= directions.count("buy") <= 7 and 3 <= directions.count("avoid") <= 7):
+        raise llm.LLMParseError("theses must contain 3-7 unique buy and 3-7 unique avoid entries")
+    identities: set[tuple[str, ...]] = set()
+    for thesis in theses:
+        identity = _thesis_identity(thesis)
+        if identity in identities:
+            raise llm.LLMParseError(f"duplicate {thesis['direction']} thesis")
+        identities.add(identity)
+        driving = thesis["driving_signals"]
+        if len(driving) != len(set(driving)) or any(item not in supplied_titles for item in driving):
+            raise llm.LLMParseError("driving_signals must be unique exact supplied signal titles")
+
+
+def _thesis_identity(thesis: dict) -> tuple[str, ...]:
+    def normalize(value: object) -> str:
+        return " ".join(str(value).split()).casefold()
+
+    return tuple(
+        normalize(thesis[field])
+        for field in ("direction", "company", "ticker", "market", "bottleneck")
+    )

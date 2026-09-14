@@ -6,13 +6,12 @@ import re
 from collections import Counter
 from datetime import date, timedelta
 
-import anthropic
-
+from pipeline import llm
 from pipeline.db import get_connection, get_active_keywords
 
 logger = logging.getLogger(__name__)
 
-MODEL = "claude-haiku-4-5-20251001"
+MODEL = llm.LUNA_MODEL
 
 DISCOVERY_WINDOW_DAYS = 7
 MIN_FREQUENCY = 3
@@ -21,15 +20,30 @@ SPIKE_MULTIPLIER = 3
 MAX_ACTIVE_KEYWORDS = 200
 
 
-def auto_manage_keywords(target_date: date | None = None) -> dict:
+def auto_manage_keywords(target_date: date | None = None, *, run_id: str | int) -> dict:
     if target_date is None:
         target_date = date.today()
 
     conn = get_connection()
-    resurged = _reactivate_resurgent(conn, target_date)
-    retired = _retire_stale(conn, target_date)
-    added = _discover_and_activate(conn, target_date)
-    spiked = _detect_spike_keywords(conn, target_date)
+    active_keywords = set(kw.lower() for kw in get_active_keywords(conn))
+    since = (target_date - timedelta(days=DISCOVERY_WINDOW_DAYS)).isoformat()
+    until = (target_date + timedelta(days=1)).isoformat()
+    rows = conn.execute(
+        "SELECT title, content_snippet FROM raw_items WHERE collected_at >= ? AND collected_at < ?",
+        (since, until),
+    ).fetchall()
+    candidates = _extract_candidates(rows, active_keywords) if len(active_keywords) < MAX_ACTIVE_KEYWORDS else []
+    evaluated = _evaluate_with_llm(candidates, active_keywords, conn=conn, run_id=run_id) if candidates else []
+    try:
+        conn.execute("BEGIN")
+        resurged = _reactivate_resurgent(conn, target_date)
+        retired = _retire_stale(conn, target_date)
+        added = _discover_and_activate(conn, target_date, evaluated=evaluated)
+        spiked = _detect_spike_keywords(conn, target_date)
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
 
     reactivated = {a["keyword"].lower() for a in added} | {s["keyword"].lower() for s in spiked} | {r.lower() for r in resurged}
     retired = [kw for kw in retired if kw.lower() not in reactivated]
@@ -93,12 +107,10 @@ def _reactivate_resurgent(conn, target_date: date) -> list[str]:
             )
             resurged.append(kw)
             logger.info("Reactivated resurgent keyword '%s' (%d mentions in %dd)", kw, mentions, DISCOVERY_WINDOW_DAYS)
-    if resurged:
-        conn.commit()
     return resurged
 
 
-def _discover_and_activate(conn, target_date: date) -> list[dict]:
+def _discover_and_activate(conn, target_date: date, *, evaluated: list[dict] | None = None) -> list[dict]:
     active_keywords = set(kw.lower() for kw in get_active_keywords(conn))
 
     active_count = len(active_keywords)
@@ -121,7 +133,8 @@ def _discover_and_activate(conn, target_date: date) -> list[dict]:
     if not candidates:
         return []
 
-    evaluated = _evaluate_with_llm(candidates, active_keywords)
+    if evaluated is None:
+        raise llm.LLMConfigurationError("keyword suggestions must be staged before persistence")
 
     activated = []
     for kw_info in evaluated:
@@ -138,7 +151,6 @@ def _discover_and_activate(conn, target_date: date) -> list[dict]:
         activated.append(kw_info)
 
     if activated:
-        conn.commit()
         logger.info("Auto-activated keywords: %s", [a["keyword"] for a in activated])
     return activated
 
@@ -179,7 +191,6 @@ def _detect_spike_keywords(conn, target_date: date) -> list[dict]:
             spiked.append({"keyword": kw, "today_count": row["total_count"], "avg_count": round(avg_count, 1)})
 
     if spiked:
-        conn.commit()
         logger.info("Spike-activated keywords: %s", [s["keyword"] for s in spiked])
     return spiked
 
@@ -204,7 +215,6 @@ def _retire_stale(conn, target_date: date) -> list[str]:
         "UPDATE keywords SET status = 'retired' WHERE keyword = ?",
         [(kw,) for kw in keywords],
     )
-    conn.commit()
     logger.info("Retired stale keywords: %s", keywords)
     return keywords
 
@@ -240,7 +250,9 @@ def _extract_candidates(rows: list, active_keywords: set[str]) -> list[tuple[str
     return filtered[:30]
 
 
-def _evaluate_with_llm(candidates: list[tuple[str, int]], active_keywords: set[str]) -> list[dict]:
+def _evaluate_with_llm(
+    candidates: list[tuple[str, int]], active_keywords: set[str], *, conn=None, run_id: str | int
+) -> list[dict]:
     candidate_lines = [f"- \"{term}\" ({count}회 등장)" for term, count in candidates]
 
     prompt = f"""당신은 기술 투자 신호 추적 시스템의 키워드 관리자입니다.
@@ -257,29 +269,48 @@ def _evaluate_with_llm(candidates: list[tuple[str, int]], active_keywords: set[s
 - 투자 관점에서 추적할 가치가 높은 것을 우선
 - 보수적으로 선별 (불확실하면 제외)
 
-JSON 배열로 반환:
-[{{"keyword": "키워드", "category": "ai_model|hardware|framework|concept|company|infrastructure", "reason": "추가 이유 (한국어, 15자 이내)"}}]
+JSON 객체로 반환:
+{{"keywords": [{{"keyword": "키워드", "category": "ai_model|hardware|framework|concept|company|infrastructure", "reason": "추가 이유 (한국어, 15자 이내)"}}]}}
 
 최대 5개까지만. 유효한 JSON만 반환하세요."""
 
-    try:
-        client = anthropic.Anthropic()
-        response = client.messages.create(
-            model=MODEL,
-            max_tokens=1000,
-            messages=[{"role": "user", "content": prompt}],
-        )
-        text = response.content[0].text.strip()
-        if text.startswith("```"):
-            lines = text.split("\n")
-            text = "\n".join(lines[1:-1] if lines[-1].strip() == "```" else lines[1:])
-
-        start = text.find("[")
-        end = text.rfind("]")
-        if start != -1 and end != -1:
-            text = text[start : end + 1]
-
-        return json.loads(text)
-    except Exception:
-        logger.exception("Keyword discovery: LLM evaluation failed")
-        return []
+    keyword_entry = {
+        "type": "object",
+        "properties": {
+            "keyword": {"type": "string", "minLength": 1, "maxLength": 80},
+            "category": {
+                "type": "string",
+                "enum": ["ai_model", "hardware", "framework", "concept", "company", "infrastructure"],
+            },
+            "reason": {"type": "string", "minLength": 1, "maxLength": 30},
+        },
+        "required": ["keyword", "category", "reason"],
+        "additionalProperties": False,
+    }
+    if conn is None:
+        conn = get_connection()
+    llm.require_no_business_transaction(conn)
+    result = llm.get_boundary().complete(
+        instructions="Select only valuable investment-signal keywords.",
+        input_text=prompt,
+        max_output_tokens=1000,
+        model=MODEL,
+        workload="keyword_discovery",
+        run_id=run_id,
+        output_schema=llm.strict_object_schema(
+            "keyword_suggestions",
+            {
+                "keywords": {
+                    "type": "array",
+                    "maxItems": min(5, len(candidates)),
+                    "items": keyword_entry,
+                }
+            },
+        ),
+    )
+    selected = result.parsed["keywords"]
+    candidate_names = {name.casefold() for name, _ in candidates}
+    selected_names = [entry["keyword"].casefold() for entry in selected]
+    if len(selected_names) != len(set(selected_names)) or any(name not in candidate_names for name in selected_names):
+        raise llm.LLMParseError("keyword suggestions must be unique supplied candidates")
+    return selected
