@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 
 from pipeline import llm
@@ -40,3 +42,23 @@ def test_scorer_does_not_persist_neutral_scores_when_openai_is_unavailable(monke
         scorer._score_batch("system", [
             {"id": 1, "source": "rss", "title": "item", "content_snippet": "text", "metadata": None}
         ], run_id="test-run")
+
+
+def test_launch_scripts_use_keychain_and_do_not_retry_or_source_dotenv() -> None:
+    root = Path(__file__).resolve().parents[2]
+    runner = (root / "scripts" / "run-pipeline.sh").read_text()
+    daily = (root / "scripts" / "run-daily.sh").read_text()
+    event = (root / "scripts" / "run-event.sh").read_text()
+    event_plist = (root / "launchd" / "com.signalcatcher.event.plist").read_text()
+
+    assert "find-generic-password" in runner
+    assert "login.keychain-db" in runner
+    assert "OPENAI_API_KEY" in runner
+    assert "source " not in runner
+    assert ".env" not in runner
+    assert "MAX_RETRIES" not in runner
+    assert "for attempt" not in runner
+    assert 'exec "$VENV" -m pipeline "$MODE"' in runner
+    assert "run-pipeline.sh\" daily" in daily
+    assert "run-pipeline.sh\" event" in event
+    assert "scripts/run-event.sh" in event_plist

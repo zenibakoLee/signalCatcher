@@ -53,21 +53,21 @@ def test_install_cleans_up_obsolete_weekly_service_on_upgrade(tmp_path: Path) ->
     assert not (LAUNCHD / "com.signalcatcher.weekly.plist").exists()
 
 
-def test_daily_launch_agent_uses_existing_daily_cli_wrapper() -> None:
+def test_daily_launch_agent_uses_keychain_daily_wrapper() -> None:
     shell, wrapper = _program_arguments("com.signalcatcher.daily.plist")
     wrapper_path = Path(wrapper)
 
     assert shell == "/bin/bash"
     assert wrapper_path.is_file()
-    assert '"$VENV" -m pipeline daily' in wrapper_path.read_text()
+    assert 'run-pipeline.sh" daily' in wrapper_path.read_text()
     assert "daily" in cli.commands
 
 
-def test_event_launch_agent_uses_existing_event_cli_command() -> None:
-    python, module_flag, module, command = _program_arguments(
-        "com.signalcatcher.event.plist"
-    )
+def test_event_launch_agent_uses_keychain_event_wrapper() -> None:
+    shell, wrapper = _program_arguments("com.signalcatcher.event.plist")
+    wrapper_path = Path(wrapper)
 
-    assert Path(python).is_file()
-    assert (module_flag, module, command) == ("-m", "pipeline", "event")
-    assert command in cli.commands
+    assert shell == "/bin/bash"
+    assert wrapper_path.is_file()
+    assert 'run-pipeline.sh" event' in wrapper_path.read_text()
+    assert "event" in cli.commands
