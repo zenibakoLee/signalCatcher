@@ -43,6 +43,7 @@ def verify_sec_candidate(
         or isinstance(cik, bool)
         or not isinstance(cik, int)
         or cik <= 0
+        or cik > 9_999_999_999
     ):
         return None
     url = SEC_SUBMISSIONS_URL_TEMPLATE.format(cik=cik)
@@ -65,7 +66,8 @@ def verify_sec_candidate(
     forms = recent.get("form") if isinstance(recent, dict) else None
     accepted = recent.get("acceptanceDateTime") if isinstance(recent, dict) else None
     if (
-        payload.get("entityType") != "operating"
+        payload.get("cik") != f"{cik:010d}"
+        or payload.get("entityType") != "operating"
         or not isinstance(tickers, list)
         or not isinstance(exchanges, list)
         or len(tickers) != 1
@@ -87,9 +89,15 @@ def verify_sec_candidate(
         if form not in {"10-K", "10-Q"} or not isinstance(accepted_at, str):
             continue
         try:
-            accepted_date = datetime.fromisoformat(accepted_at).date()
+            accepted_datetime = datetime.fromisoformat(accepted_at)
         except ValueError:
             continue
+        if (
+            accepted_datetime.tzinfo is None
+            or accepted_datetime.utcoffset() != timedelta(0)
+        ):
+            continue
+        accepted_date = accepted_datetime.astimezone(UTC).date()
         if cutoff <= accepted_date <= reference_date:
             return {
                 **record,

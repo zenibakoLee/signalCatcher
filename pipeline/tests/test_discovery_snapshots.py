@@ -231,8 +231,9 @@ def _staged_sec_records() -> list[dict[str, object]]:
     )
 
 
-def _submissions_payload(ticker: str, exchange: str) -> dict[str, object]:
+def _submissions_payload(ticker: str, exchange: str, cik: int) -> dict[str, object]:
     return {
+        "cik": f"{cik:010d}",
         "entityType": "operating",
         "tickers": [ticker],
         "exchanges": [exchange],
@@ -248,7 +249,9 @@ def _verified_record(index: int = 0) -> dict[str, object]:
     verified = verify_sec_candidate(
         record,
         http_get=lambda _url, **_kwargs: _SecResponse(
-            _submissions_payload(str(record["ticker"]), str(record["exchange"]))
+            _submissions_payload(
+                str(record["ticker"]), str(record["exchange"]), int(record["cik"])
+            )
         ),
         as_of="2026-09-14",
     )
@@ -262,7 +265,9 @@ def _fixture_candidate_verifier(
     return verify_sec_candidate(
         record,
         http_get=lambda _url, **_kwargs: _SecResponse(
-            _submissions_payload(str(record["ticker"]), str(record["exchange"]))
+            _submissions_payload(
+                str(record["ticker"]), str(record["exchange"]), int(record["cik"])
+            )
         ),
         as_of=as_of,
     )
@@ -280,7 +285,11 @@ def test_sec_submissions_verifies_operating_issuer_sole_exchange_ticker_and_peri
         ) -> _SecResponse:
             _calls.append({"url": url, **kwargs})
             return _SecResponse(
-                _submissions_payload(str(_record["ticker"]), str(_record["exchange"]))
+                _submissions_payload(
+                    str(_record["ticker"]),
+                    str(_record["exchange"]),
+                    int(_record["cik"]),
+                )
             )
 
         verified = verify_sec_candidate(record, http_get=get, as_of="2026-09-14")
@@ -300,13 +309,16 @@ def test_sec_submissions_verifies_operating_issuer_sole_exchange_ticker_and_peri
 
 def test_sec_submissions_fails_closed_when_sole_ticker_operating_periodic_proof_is_missing() -> None:
     record = _staged_sec_records()[0]
-    valid = _submissions_payload("ETN", "NYSE")
+    valid = _submissions_payload("ETN", "NYSE", int(record["cik"]))
     cases = [
         {**valid, "entityType": "other"},  # fund / ETF
         {**valid, "tickers": ["OTHER"], "exchanges": ["NYSE"]},
         {**valid, "tickers": ["ETN"], "exchanges": ["Nasdaq"]},
         {**valid, "filings": {"recent": {"form": ["8-K"], "acceptanceDateTime": ["2026-08-01T12:00:00Z"]}}},
         {**valid, "filings": {"recent": {"form": ["10-K"], "acceptanceDateTime": ["2020-01-01T12:00:00Z"]}}},
+        {**valid, "cik": f"{int(record['cik']) + 1:010d}"},
+        {**valid, "cik": int(record["cik"])},
+        {**valid, "filings": {"recent": {"form": ["10-Q"], "acceptanceDateTime": ["2026-08-01T21:00:00+09:00"]}}},
         {"entityType": "operating", "tickers": "ETN", "exchanges": ["NYSE"]},
     ]
 
@@ -316,6 +328,15 @@ def test_sec_submissions_fails_closed_when_sole_ticker_operating_periodic_proof_
             http_get=lambda _url, _payload=payload, **_kwargs: _SecResponse(_payload),
             as_of="2026-09-14",
         ) is None
+
+    overwide_cik = 10_000_000_000
+    assert verify_sec_candidate(
+        {**record, "cik": overwide_cik},
+        http_get=lambda _url, **_kwargs: _SecResponse(
+            {**valid, "cik": str(overwide_cik)}
+        ),
+        as_of="2026-09-14",
+    ) is None
 
     for suffix in ("WS", "U", "RT"):
         security = {**record, "ticker": f"ETN.{suffix}"}
@@ -341,7 +362,9 @@ def test_sec_submissions_rejects_every_multi_security_array_ordering() -> None:
 
     for record, tickers in cases:
         payload = {
-            **_submissions_payload(str(record["ticker"]), "NYSE"),
+            **_submissions_payload(
+                str(record["ticker"]), "NYSE", int(record["cik"])
+            ),
             "tickers": tickers,
             "exchanges": ["NYSE"] * len(tickers),
         }
