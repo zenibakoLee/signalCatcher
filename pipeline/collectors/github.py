@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import logging
 import os
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 
 import httpx
 
@@ -47,7 +47,9 @@ class GitHubCollector(BaseCollector):
                 except Exception:
                     logger.exception("GitHub: failed keyword '%s'", kw)
 
-            yesterday = max(since, datetime.now() - timedelta(days=1)).strftime("%Y-%m-%d")
+            yesterday = max(
+                since, datetime.now() - timedelta(days=1)  # noqa: DTZ005
+            ).strftime("%Y-%m-%d")
 
             # --- extra topic queries from config ---
             for extra in self.extra_queries:
@@ -74,7 +76,9 @@ class GitHubCollector(BaseCollector):
                 logger.exception("GitHub: failed trending query")
 
             # --- rising stars: new repos that went viral (<30 days old, >100 stars) ---
-            thirty_days_ago = (datetime.now() - timedelta(days=30)).strftime("%Y-%m-%d")
+            thirty_days_ago = (
+                datetime.now() - timedelta(days=30)  # noqa: DTZ005
+            ).strftime("%Y-%m-%d")
             await self.rate_limiter.acquire()
             try:
                 rising = await self._search(
@@ -139,9 +143,9 @@ class GitHubCollector(BaseCollector):
             desc = repo.get("description") or ""
             created = repo.get("created_at", "")
             try:
-                published = datetime.fromisoformat(created.replace("Z", "+00:00")).replace(tzinfo=None)
+                published = datetime.fromisoformat(created).astimezone(UTC)
             except (ValueError, AttributeError):
-                published = datetime.now()
+                published = datetime.now(UTC)
 
             items.append(
                 RawItem(

@@ -22,30 +22,62 @@ def _load_scoring_prompt() -> str:
     return (CONFIG_DIR / "scoring_prompt.txt").read_text()
 
 
+def _validate_item_ids(item_ids: list[int]) -> None:
+    if not isinstance(item_ids, list) or any(type(item_id) is not int for item_id in item_ids):
+        raise TypeError("scorer item IDs must be a list of integers")
+    if len(set(item_ids)) != len(item_ids):
+        raise ValueError("scorer item IDs must be unique")
+    if len(item_ids) > MAX_SCORED_ITEMS_PER_RUN:
+        raise llm.RequestLimitExceededError(
+            f"scoring run has {len(item_ids)} items; cap is {MAX_SCORED_ITEMS_PER_RUN}"
+        )
+
+
+def _chunks(item_ids: list[int]):
+    for start in range(0, len(item_ids), BATCH_SIZE):
+        yield item_ids[start : start + BATCH_SIZE]
+
+
+def _fetch_id_set(conn, *, table: str, column: str, item_ids: list[int]) -> set[int]:
+    matches: set[int] = set()
+    for chunk in _chunks(item_ids):
+        rows = conn.execute(
+            f"SELECT {column} FROM {table} WHERE {column} IN ({','.join('?' for _ in chunk)})",
+            chunk,
+        ).fetchall()
+        matches.update(row[column] for row in rows)
+    return matches
+
+
 def score_items(item_ids: list[int], *, run_id: str | int) -> int:
+    _validate_item_ids(item_ids)
     if not item_ids:
         return 0
     conn = get_connection()
-    already_scored = {
-        r["raw_item_id"]
-        for r in conn.execute(
-            f"SELECT raw_item_id FROM scored_items WHERE raw_item_id IN ({','.join('?' for _ in item_ids)})",
-            item_ids,
-        ).fetchall()
-    }
+    existing_ids = _fetch_id_set(
+        conn, table="raw_items", column="id", item_ids=item_ids
+    )
+    missing_ids = [item_id for item_id in item_ids if item_id not in existing_ids]
+    if missing_ids:
+        raise ValueError(f"scorer item IDs do not exist: {missing_ids}")
+    already_scored = _fetch_id_set(
+        conn, table="scored_items", column="raw_item_id", item_ids=item_ids
+    )
     to_score = [item_id for item_id in item_ids if item_id not in already_scored]
-    if len(to_score) > MAX_SCORED_ITEMS_PER_RUN:
-        raise llm.RequestLimitExceededError(
-            f"scoring run has {len(to_score)} items; cap is {MAX_SCORED_ITEMS_PER_RUN}"
-        )
     if not to_score:
         logger.info("Scorer: all %d items already scored", len(item_ids))
         return 0
-    rows = conn.execute(
-        f"""SELECT id, source, title, url, content_snippet, metadata
-            FROM raw_items WHERE id IN ({','.join('?' for _ in to_score)})""",
-        to_score,
-    ).fetchall()
+    rows_by_id = {}
+    for chunk in _chunks(to_score):
+        rows_by_id.update(
+            (row["id"], row)
+            for row in conn.execute(
+                f"""SELECT id, source, title, url, content_snippet, metadata
+                    FROM raw_items WHERE id IN ({','.join('?' for _ in chunk)})""",
+                chunk,
+            ).fetchall()
+        )
+    rows = [rows_by_id[item_id] for item_id in to_score]
     system_prompt = _load_scoring_prompt()
     staged: list[tuple[Any, dict]] = []
     for batch_start in range(0, len(rows), BATCH_SIZE):

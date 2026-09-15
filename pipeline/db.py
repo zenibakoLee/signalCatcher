@@ -157,24 +157,35 @@ def _migrate_security_master(conn: sqlite3.Connection) -> None:
         conn.execute("RELEASE security_master_migration")
 
 
+def _execute_raw_item_insert(
+    conn: sqlite3.Connection, item: RawItem
+) -> sqlite3.Cursor:
+    published_at = item.published_at
+    if published_at.tzinfo is not None and published_at.utcoffset() is not None:
+        published_at = published_at.astimezone(UTC)
+    return conn.execute(
+        """INSERT OR IGNORE INTO raw_items
+           (source, source_id, title, url, author, content_snippet,
+            published_at, collected_at, metadata)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+        (
+            item.source,
+            item.source_id,
+            item.title,
+            item.url,
+            item.author,
+            item.content_snippet,
+            published_at.isoformat(),
+            datetime.now(UTC).isoformat(),
+            json.dumps(item.metadata) if item.metadata else None,
+        ),
+    )
+
+
 def insert_raw_item(item: RawItem) -> int | None:
     conn = get_connection()
     try:
-        cur = conn.execute(
-            """INSERT OR IGNORE INTO raw_items
-               (source, source_id, title, url, author, content_snippet, published_at, metadata)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
-            (
-                item.source,
-                item.source_id,
-                item.title,
-                item.url,
-                item.author,
-                item.content_snippet,
-                item.published_at.isoformat(),
-                json.dumps(item.metadata) if item.metadata else None,
-            ),
-        )
+        cur = _execute_raw_item_insert(conn, item)
         conn.commit()
         if cur.rowcount == 0:
             return None
@@ -182,6 +193,27 @@ def insert_raw_item(item: RawItem) -> int | None:
     except sqlite3.Error:
         conn.rollback()
         raise
+
+
+def insert_raw_items(items: list[RawItem]) -> list[int]:
+    """Insert one deduplication batch atomically and return committed row IDs."""
+    conn = get_connection()
+    if conn.in_transaction:
+        raise RuntimeError("raw item batch insert requires no open transaction")
+    new_ids: list[int] = []
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        for item in items:
+            cur = _execute_raw_item_insert(conn, item)
+            if cur.rowcount == 1:
+                if cur.lastrowid is None:
+                    raise RuntimeError("raw item insert returned no row ID")
+                new_ids.append(cur.lastrowid)
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    return new_ids
 
 
 def _kst_date_to_utc_range(date_str: str) -> tuple[str, str]:
@@ -290,7 +322,7 @@ CREATE TABLE IF NOT EXISTS raw_items (
     author          TEXT,
     content_snippet TEXT,
     published_at    TEXT NOT NULL,
-    collected_at    TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%S','now')),
+    collected_at    TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%S+00:00','now')),
     metadata        TEXT,
     UNIQUE(source, source_id)
 );

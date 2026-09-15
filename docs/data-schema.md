@@ -23,6 +23,10 @@ conferences.yaml ──LLM──> conference_briefings
 --   reddit metadata: subreddit, score, num_comments, upvote_ratio, link_flair_text, external_url
 --   youtube metadata: channel_id, channel_name, thumbnail (채널 수집), search_query (검색 수집)
 -- content_snippet: 본문/초록 첫 500자
+-- collected_at: UTC. 기존 SQLite strftime 기본값의 offset 없는 값만 UTC로 해석한다.
+--   신규 앱 쓰기와 신규 스키마 기본값은 +00:00이 포함된 ISO 8601을 저장한다.
+-- published_at: offset이 있는 값만 절대시각으로 정렬한다. timezone 근거가 없는
+--   기존 naive 값은 UTC로 추정하지 않고 collected_at을 정렬 fallback으로 사용한다.
 ```
 
 ## scored_items — LLM 스코어링

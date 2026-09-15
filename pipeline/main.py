@@ -4,7 +4,8 @@ import asyncio
 import logging
 import time
 import uuid
-from datetime import datetime, timedelta
+from dataclasses import dataclass
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import click
@@ -13,11 +14,11 @@ import yaml
 from pipeline import llm
 from pipeline.db import (
     complete_pipeline_run,
+    get_active_keywords,
     get_connection,
     get_keyword_categories,
     init_db,
     load_keywords_from_yaml,
-    get_active_keywords,
     start_pipeline_run,
 )
 from pipeline.processing.dedup import deduplicate_and_store
@@ -35,6 +36,38 @@ def _new_llm_run_id(kind: str, pipeline_run_id: int) -> str:
     return f"{kind}-{pipeline_run_id}-{uuid.uuid4()}"
 
 
+@dataclass(frozen=True)
+class DailyScoringResult:
+    items_scored: int
+    deferred_count: int
+    malformed_count: int = 0
+    validation_error: str | None = None
+
+
+def _score_daily_window(
+    *, since: datetime, until: datetime, run_id: str | int
+) -> DailyScoringResult:
+    from pipeline.processing.scorer import MAX_SCORED_ITEMS_PER_RUN, score_items
+    from pipeline.processing.scoring_selection import select_daily_scoring_items
+
+    selection = select_daily_scoring_items(
+        get_connection(), since=since, until=until, limit=MAX_SCORED_ITEMS_PER_RUN
+    )
+    items_scored = score_items(selection.item_ids, run_id=run_id)
+    validation_error = None
+    if items_scored != len(selection.item_ids):
+        validation_error = (
+            "daily scorer persisted "
+            f"{items_scored} of {len(selection.item_ids)} selected items"
+        )
+    return DailyScoringResult(
+        items_scored=items_scored,
+        deferred_count=selection.deferred_count,
+        malformed_count=selection.malformed_count,
+        validation_error=validation_error,
+    )
+
+
 def _load_sources_config() -> dict:
     with open(CONFIG_DIR / "sources.yaml") as f:
         return yaml.safe_load(f)
@@ -48,16 +81,16 @@ def write_current_discovery_snapshots(run_id: int) -> dict[str, int]:
 
 
 async def _collect_all(keywords: list[str], since: datetime) -> tuple[list, list[str]]:
-    from pipeline.collectors.hackernews import HackerNewsCollector
-    from pipeline.collectors.rss import RSSCollector
     from pipeline.collectors.arxiv import ArxivCollector
-    from pipeline.collectors.github import GitHubCollector
-    from pipeline.collectors.youtube import YouTubeCollector
     from pipeline.collectors.dcinside import DCInsideCollector
-    from pipeline.collectors.trendshift import TrendshiftCollector
-    from pipeline.collectors.sec_form4 import SECForm4Collector
-    from pipeline.collectors.polymarket import PolymarketCollector
+    from pipeline.collectors.github import GitHubCollector
+    from pipeline.collectors.hackernews import HackerNewsCollector
     from pipeline.collectors.openrouter import OpenRouterCollector
+    from pipeline.collectors.polymarket import PolymarketCollector
+    from pipeline.collectors.rss import RSSCollector
+    from pipeline.collectors.sec_form4 import SECForm4Collector
+    from pipeline.collectors.trendshift import TrendshiftCollector
+    from pipeline.collectors.youtube import YouTubeCollector
     from pipeline.utils.rate_limiter import get_limiter
 
     sources_cfg = _load_sources_config()
@@ -130,8 +163,12 @@ def daily(hours: int):
     start = time.time()
     run_id = start_pipeline_run("daily")
     llm_run_id = _new_llm_run_id("daily", run_id)
-    since = datetime.now() - timedelta(hours=hours)
+    since = datetime.now() - timedelta(hours=hours)  # noqa: DTZ005
+    scoring_since = datetime.now(UTC) - timedelta(hours=hours)
     keywords = get_active_keywords()
+    new_ids: list[int] = []
+    items_scored = 0
+    errors: list[str] = []
 
     logger.info("Starting daily pipeline: %d keywords, since %s", len(keywords), since.isoformat())
 
@@ -166,9 +203,28 @@ def daily(hours: int):
         from pipeline.processing.trend_detector import detect_trends
         trend_alerts = detect_trends(run_id=llm_run_id)
 
-        # Step 6: Score bounded items through isolated Codex OAuth.
-        from pipeline.processing.scorer import score_items
-        items_scored = score_items(new_ids, run_id=llm_run_id)
+        # Step 6: Score a bounded, recoverable current-window selection.
+        scoring_until = datetime.now(UTC)
+        scoring_result = _score_daily_window(
+            since=scoring_since, until=scoring_until, run_id=llm_run_id
+        )
+        items_scored = scoring_result.items_scored
+        if scoring_result.deferred_count:
+            from pipeline.processing.scorer import MAX_SCORED_ITEMS_PER_RUN
+
+            errors.append(
+                "scoring coverage gap: deferred "
+                f"{scoring_result.deferred_count} current-window items due to "
+                f"{MAX_SCORED_ITEMS_PER_RUN}-item daily cap"
+            )
+        if scoring_result.malformed_count:
+            errors.append(
+                "scoring coverage gap: deferred "
+                f"{scoring_result.malformed_count} current-window items due to "
+                "invalid collected_at timestamps"
+            )
+        if scoring_result.validation_error:
+            raise RuntimeError(scoring_result.validation_error)
 
         # Step 7: Generate digest
         from pipeline.generators.daily_digest import generate_digest
@@ -177,15 +233,23 @@ def daily(hours: int):
         # Step 7.5: Generate comic for digest
         comic_path = None
         if digest_data:
-            from pipeline.generators.comic import generate_digest_comic
             from datetime import date
-            comic_path = generate_digest_comic(digest_data, date.today().isoformat())
+
+            from pipeline.generators.comic import generate_digest_comic
+            comic_path = generate_digest_comic(
+                digest_data, date.today().isoformat()  # noqa: DTZ011
+            )
 
         # Step 8: Deliver to Discord
         if digest_data:
-            from pipeline.delivery.discord_webhook import deliver_digest
             from datetime import date
-            deliver_digest(digest_data, date.today().isoformat(), comic_path=comic_path)
+
+            from pipeline.delivery.discord_webhook import deliver_digest
+            deliver_digest(
+                digest_data,
+                date.today().isoformat(),  # noqa: DTZ011
+                comic_path=comic_path,
+            )
 
         accel_alerts = [a for a in trend_alerts if a.severity == "accelerating"]
         if accel_alerts:
@@ -208,9 +272,12 @@ def daily(hours: int):
         )
 
         if errors:
-            from pipeline.delivery.discord_webhook import deliver_collector_errors
             from datetime import date
-            deliver_collector_errors(errors, date.today().isoformat())
+
+            from pipeline.delivery.discord_webhook import deliver_collector_errors
+            deliver_collector_errors(
+                errors, date.today().isoformat()  # noqa: DTZ011
+            )
 
         duration = time.time() - start
         status = "completed" if not errors else "completed_with_errors"
@@ -231,8 +298,16 @@ def daily(hours: int):
         )
     except Exception as e:
         duration = time.time() - start
+        terminal_error = str(e)
+        if terminal_error not in errors:
+            errors.append(terminal_error)
         complete_pipeline_run(
-            run_id, status="failed", errors=[str(e)], duration_secs=round(duration, 2)
+            run_id,
+            status="failed",
+            items_collected=len(new_ids),
+            items_scored=items_scored,
+            errors=errors,
+            duration_secs=round(duration, 2),
         )
         logger.exception("Daily pipeline failed")
         from pipeline.delivery.discord_webhook import deliver_error_alert
@@ -246,7 +321,7 @@ def backfill(days: int):
     """Backfill historical data for trend detection baseline."""
     start = time.time()
     run_id = start_pipeline_run("backfill")
-    since = datetime.now() - timedelta(days=days)
+    since = datetime.now() - timedelta(days=days)  # noqa: DTZ005
     keywords = get_active_keywords()
 
     logger.info("Starting backfill: %d days, %d keywords", days, len(keywords))
@@ -278,8 +353,8 @@ def backfill(days: int):
 
 
 async def _collect_backfill(keywords: list[str], since: datetime) -> tuple[list, list[str]]:
-    from pipeline.collectors.hackernews import HackerNewsCollector
     from pipeline.collectors.github import GitHubCollector
+    from pipeline.collectors.hackernews import HackerNewsCollector
     from pipeline.utils.rate_limiter import get_limiter
 
     sources_cfg = _load_sources_config()
@@ -315,14 +390,15 @@ async def _collect_backfill(keywords: list[str], since: datetime) -> tuple[list,
 def event(target_date: str | None):
     """Check for conferences needing pre/post-event briefings."""
     from datetime import date as date_type
-    from pipeline.generators.conference_briefing import (
-        get_actionable_conferences,
-        generate_pre_event,
-        generate_post_event,
-        _persist_pre_event,
-        _persist_post_event,
-    )
+
     from pipeline.delivery.discord_webhook import deliver_conference_briefing
+    from pipeline.generators.conference_briefing import (
+        _persist_post_event,
+        _persist_pre_event,
+        generate_post_event,
+        generate_pre_event,
+        get_actionable_conferences,
+    )
 
     target = date_type.fromisoformat(target_date) if target_date else None
     run_id = f"event-{uuid.uuid4()}"

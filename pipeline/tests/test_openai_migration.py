@@ -5,9 +5,14 @@ from pathlib import Path
 import pytest
 
 from pipeline import llm, main
-from pipeline.generators import company_analysis, conference_briefing, daily_digest, keyword_suggestions, thesis_scout
+from pipeline.generators import (
+    company_analysis,
+    conference_briefing,
+    daily_digest,
+    keyword_suggestions,
+    thesis_scout,
+)
 from pipeline.processing import scorer, trend_detector
-
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -56,8 +61,9 @@ def test_daily_llm_namespace_is_uuid_backed_and_separate_from_business_run_id() 
     uuid.UUID(second.removeprefix("daily-7-"))
     source = (ROOT / "pipeline" / "main.py").read_text()
     assert "llm_run_id = _new_llm_run_id(\"daily\", run_id)" in source
-    for call in ("auto_manage_keywords", "detect_trends", "score_items", "generate_digest", "run_thesis_scout"):
-        assert f"{call}(run_id=llm_run_id" in source or f"{call}(new_ids, run_id=llm_run_id" in source
+    for call in ("auto_manage_keywords", "detect_trends", "generate_digest", "run_thesis_scout"):
+        assert f"{call}(run_id=llm_run_id" in source
+    assert "since=scoring_since, until=scoring_until, run_id=llm_run_id" in source
 
 
 def test_launch_script_preflights_codex_oauth_without_openai_key_or_dotenv() -> None:
