@@ -114,7 +114,10 @@ def _synthesis_schema(candidate_limit: int) -> dict[str, Any]:
         "type": "object",
         "properties": {
             "raw_item_id": {"type": "integer", "minimum": 1},
-            "source_date": {"type": "string", "pattern": r"^\d{4}-\d{2}-\d{2}$"},
+            "source_date": {
+                "type": "string", "maxLength": 10,
+                "pattern": r"^\d{4}-\d{2}-\d{2}$",
+            },
         },
         "required": ["raw_item_id", "source_date"],
         "additionalProperties": False,
@@ -122,8 +125,14 @@ def _synthesis_schema(candidate_limit: int) -> dict[str, Any]:
     stage = {
         "type": "object",
         "properties": {
-            "stage": {"type": "string", "enum": list(PLATFORM_STAGES)},
-            "status": {"type": "string", "enum": ["proven", "missing"]},
+            "stage": {
+                "type": "string", "maxLength": 64,
+                "enum": list(PLATFORM_STAGES),
+            },
+            "status": {
+                "type": "string", "maxLength": 16,
+                "enum": ["proven", "missing"],
+            },
             "claim": {"type": "string", "maxLength": 1000},
             "citations": {"type": "array", "minItems": 0, "maxItems": 4, "items": citation},
         },

@@ -506,6 +506,12 @@ def test_incomplete_gate_is_insufficient_with_explicit_missing_stage_and_no_scor
     assert row["score"] is None and row["rank"] is None
 
 
+def test_weekly_synthesis_schema_is_accepted_by_live_boundary_validation() -> None:
+    schema = superstar_weekly._synthesis_schema(superstar_weekly.MAX_FINAL_CANDIDATES)
+
+    llm._validate_schema_definition(schema["schema"], "$")
+
+
 def test_weekly_llm_contract_uses_luna_then_at_most_one_terra_and_isolated_run(monkeypatch) -> None:
     conn = _conn()
     _seed_evidence(conn)
