@@ -506,6 +506,27 @@ def test_incomplete_gate_is_insufficient_with_explicit_missing_stage_and_no_scor
     assert row["score"] is None and row["rank"] is None
 
 
+def test_missing_stage_output_is_fail_closed_without_persisting_model_content() -> None:
+    conn = _conn()
+    _seed_evidence(conn)
+    evidence = superstar_weekly.select_recent_evidence(
+        conn, as_of=datetime(2026, 9, 15, tzinfo=UTC), lookback_days=30, limit=10
+    )
+    candidate = _terra_candidate(missing="de_facto_standard")
+    missing = candidate["stages"][-1]
+    missing["claim"] = "unsupported model explanation"
+    missing["citations"] = _citations(6)
+
+    validated = superstar_weekly.validate_synthesis({"candidates": [candidate]}, evidence)
+
+    assert validated[0]["stages"][-1] == {
+        "stage": "de_facto_standard",
+        "status": "missing",
+        "claim": "",
+        "citations": [],
+    }
+
+
 def test_weekly_synthesis_schema_is_accepted_by_live_boundary_validation() -> None:
     schema = superstar_weekly._synthesis_schema(superstar_weekly.MAX_FINAL_CANDIDATES)
 

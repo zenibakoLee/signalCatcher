@@ -233,9 +233,13 @@ def validate_synthesis(
             citations = stage["citations"]
             claim = str(stage["claim"])
             if status == "missing":
-                if citations or claim:
-                    raise llm.LLMParseError("missing stages cannot contain generated evidence")
-                resolved_stages.append({**stage, "citations": []})
+                # Missing is a fail-closed state. Discard any model-authored claim
+                # or citation instead of letting unsupported content reach storage.
+                resolved_stages.append({
+                    **stage,
+                    "claim": "",
+                    "citations": [],
+                })
                 continue
             if not citations or not claim.strip():
                 raise llm.LLMParseError("proven stages require a claim and exact citations")
