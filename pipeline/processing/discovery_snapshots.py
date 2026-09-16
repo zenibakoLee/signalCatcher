@@ -295,6 +295,32 @@ def _raw_evidence(conn: sqlite3.Connection, keyword: str, as_of: str) -> tuple[l
     return [row["id"] for row in rows], [row["source"] for row in rows]
 
 
+def write_theme_snapshots(
+    conn: sqlite3.Connection,
+    pipeline_run_id: int,
+    *,
+    as_of: str | None = None,
+    business_date_provider: Callable[[], date] = date.today,
+) -> int:
+    """Persist daily emerging-theme monitoring without any candidate work."""
+    as_of = as_of or business_date_provider().isoformat()
+    themes = []
+    for alert in conn.execute(
+        "SELECT keyword, z_score FROM trend_alerts WHERE alert_date = ? ORDER BY keyword",
+        (as_of,),
+    ):
+        raw_ids, sources = _raw_evidence(conn, alert["keyword"], as_of)
+        themes.append(build_theme_snapshot({
+            "keyword": alert["keyword"],
+            "z_score": alert["z_score"],
+            "raw_item_ids": raw_ids,
+            "sources": sources,
+            "as_of": as_of,
+        }, pipeline_run_id))
+    persist_discovery_snapshots(conn, themes, [])
+    return len(themes)
+
+
 def write_discovery_snapshots(
     conn: sqlite3.Connection,
     pipeline_run_id: int | None,

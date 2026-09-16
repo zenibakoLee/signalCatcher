@@ -311,7 +311,12 @@ def test_daily_records_exact_deferred_coverage_and_continues_downstream(
         "pipeline.processing.scorer.score_items",
         lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("unbounded scorer path used")),
     )
-    monkeypatch.setattr(main, "write_current_discovery_snapshots", lambda _run_id: {"themes": 0, "candidates": 0})
+    monkeypatch.setattr(
+        "pipeline.generators.thesis_scout.run_thesis_scout",
+        lambda **_kwargs: (_ for _ in ()).throw(
+            AssertionError("daily must not generate candidates")
+        ),
+    )
     monkeypatch.setattr(main, "complete_pipeline_run", lambda _run_id, **values: completed.append(values))
     monkeypatch.setattr("pipeline.collectors.apewisdom.collect_social_buzz", lambda: _async_value(0))
     monkeypatch.setattr("pipeline.processing.transcript.enrich_youtube_transcripts", lambda _ids: 0)
@@ -322,13 +327,18 @@ def test_daily_records_exact_deferred_coverage_and_continues_downstream(
         "pipeline.generators.daily_digest.generate_digest",
         lambda **_kwargs: downstream.append("digest") or None,
     )
-    monkeypatch.setattr("pipeline.generators.thesis_scout.run_thesis_scout", lambda **_kwargs: downstream.append("discovery") or [])
+    monkeypatch.setattr(
+        main,
+        "write_current_theme_snapshots",
+        lambda _run_id: downstream.append("themes") or 0,
+    )
+
     monkeypatch.setattr("pipeline.delivery.discord_webhook.deliver_error_alert", lambda *_args: None)
 
     result = CliRunner().invoke(main.daily, ["--hours", "24"])
 
     assert result.exception is None
-    assert downstream == ["digest", "discovery"]
+    assert downstream == ["digest", "themes"]
     assert len(completed) == 1
     assert completed[0]["status"] == "completed_with_errors"
     assert completed[0]["items_collected"] == 857

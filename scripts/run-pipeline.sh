@@ -3,8 +3,8 @@ set -euo pipefail
 
 MODE="${1:-}"
 case "$MODE" in
-    daily|event) ;;
-    *) echo "usage: $0 {daily|event}" >&2; exit 64 ;;
+    daily|event|superstar-weekly) ;;
+    *) echo "usage: $0 {daily|event|superstar-weekly}" >&2; exit 64 ;;
 esac
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"

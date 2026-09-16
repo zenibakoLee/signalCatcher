@@ -7,6 +7,7 @@ import uuid
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 import click
 import yaml
@@ -73,11 +74,11 @@ def _load_sources_config() -> dict:
         return yaml.safe_load(f)
 
 
-def write_current_discovery_snapshots(run_id: int) -> dict[str, int]:
-    """Persist preliminary discovery output only after daily upstream work succeeds."""
-    from pipeline.processing.discovery_snapshots import write_discovery_snapshots
+def write_current_theme_snapshots(run_id: int) -> int:
+    """Retain daily theme monitoring while candidate discovery stays weekly."""
+    from pipeline.processing.discovery_snapshots import write_theme_snapshots
 
-    return write_discovery_snapshots(get_connection(), pipeline_run_id=run_id)
+    return write_theme_snapshots(get_connection(), run_id)
 
 
 async def _collect_all(keywords: list[str], since: datetime) -> tuple[list, list[str]]:
@@ -256,20 +257,8 @@ def daily(hours: int):
             from pipeline.delivery.discord_webhook import deliver_acceleration_alerts
             deliver_acceleration_alerts(accel_alerts)
 
-        # Step 9: 시그널 기반 투자 대상 발굴 (2차적 추론 — 매수 발굴 + 회피/청산)
-        from pipeline.generators.thesis_scout import run_thesis_scout
-        theses = run_thesis_scout(run_id=llm_run_id)
-        if theses:
-            from pipeline.delivery.discord_webhook import deliver_investment_theses
-            deliver_investment_theses(theses)
-            logger.info("Thesis scout: %d theses generated", len(theses))
-
-        snapshot_counts = write_current_discovery_snapshots(run_id)
-        logger.info(
-            "Discovery snapshots: %d emerging signals, %d candidate records",
-            snapshot_counts["themes"],
-            snapshot_counts["candidates"],
-        )
+        theme_count = write_current_theme_snapshots(run_id)
+        logger.info("Daily theme snapshots: %d", theme_count)
 
         if errors:
             from datetime import date
@@ -542,16 +531,83 @@ def translate_titles(batch_limit: int):
     logger.info("translate-titles: %d items translated", total)
 
 
-@cli.command("scout")
-@click.option("--days", default=7, help="Signal lookback window in days")
-def scout(days: int):
-    """Generate investment theses from the strongest recent signals (buy discovery + avoid/exit)."""
-    from pipeline.generators.thesis_scout import run_thesis_scout
-    theses = run_thesis_scout(window_days=days, run_id=f"scout-{uuid.uuid4()}")
-    if theses:
-        from pipeline.delivery.discord_webhook import deliver_investment_theses
-        deliver_investment_theses(theses)
-    logger.info("scout: %d theses generated", len(theses))
+@cli.command("superstar-weekly")
+@click.option("--lookback-days", type=click.IntRange(1, 90), default=30, show_default=True)
+@click.option("--evidence-limit", type=click.IntRange(1, 120), default=120, show_default=True)
+@click.option("--candidate-limit", type=click.IntRange(1, 8), default=8, show_default=True)
+@click.option("--as-of", "as_of_date", default=None, help="KST audit date (YYYY-MM-DD)")
+def superstar_weekly(
+    lookback_days: int,
+    evidence_limit: int,
+    candidate_limit: int,
+    as_of_date: str | None,
+) -> None:
+    """Run the bounded weekly source-backed Superstar audit."""
+    from datetime import date as date_type
+
+    from pipeline.generators import superstar_weekly as weekly
+
+    started = time.time()
+    pipeline_run_id = start_pipeline_run("superstar_weekly")
+    llm_run_id = _new_llm_run_id("superstar-weekly", pipeline_run_id)
+    input_items = considered = published = 0
+    errors: list[str] = []
+    try:
+        now_kst = datetime.now(ZoneInfo("Asia/Seoul"))
+        if as_of_date is not None:
+            audit_date = date_type.fromisoformat(as_of_date)
+            cutoff = datetime.combine(
+                audit_date, datetime.max.time(), tzinfo=ZoneInfo("Asia/Seoul")
+            )
+        else:
+            audit_date = now_kst.date()
+            cutoff = now_kst
+        conn = get_connection()
+        candidates, input_items = weekly.discover_candidates(
+            conn,
+            as_of=cutoff,
+            lookback_days=lookback_days,
+            evidence_limit=evidence_limit,
+            candidate_limit=candidate_limit,
+            run_id=llm_run_id,
+        )
+        security_records, sec_errors = weekly.verify_candidate_list(
+            conn, candidates, as_of=audit_date.isoformat()
+        )
+        errors.extend(sec_errors)
+        counts = weekly.persist_weekly_audit(
+            conn,
+            pipeline_run_id=pipeline_run_id,
+            as_of=audit_date.isoformat(),
+            candidates=candidates,
+            security_records=security_records,
+        )
+        considered = counts["considered"]
+        published = counts["published"]
+        complete_pipeline_run(
+            pipeline_run_id,
+            status="completed_with_errors" if errors else "completed",
+            errors=errors or None,
+            duration_secs=round(time.time() - started, 2),
+            input_items=input_items,
+            candidates_considered=considered,
+            candidates_published=published,
+        )
+    except Exception as exc:
+        message = str(exc)
+        if message not in errors:
+            errors.append(message)
+        complete_pipeline_run(
+            pipeline_run_id,
+            status="failed",
+            errors=errors,
+            duration_secs=round(time.time() - started, 2),
+            input_items=input_items,
+            candidates_considered=considered,
+            candidates_published=published,
+        )
+        logger.exception("Weekly Superstar pipeline failed")
+        raise
 
 
 if __name__ == "__main__":

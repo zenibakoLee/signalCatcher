@@ -6,7 +6,8 @@ NVIDIA의 2012년 ImageNet 우승 같은 거대한 투자 기회 신호를 포�
 
 ## 핵심 기능
 
-- **일일 파이프라인** — 5개 소스(HN, arXiv, GitHub, RSS, YouTube) 수집 → LLM 스코어링(0-100) → 관련종목 매핑 → 다이제스트 → Discord 전송 (+4컷만화 첨부)
+- **일일 파이프라인** — 수집 → LLM 스코어링 → 다이제스트/테마 운영. 후보 생성은 주간 파이프라인으로 분리
+- **주간 Superstar 가설 감사** — 최근 근거를 Luna 1회/Terra 최대 1회로 제한해 CUDA형 플랫폼 6단계를 감사한다. 현재 v1은 권위 있는 단계별 측정치가 없어 후보를 자격 인정하거나 발행하지 않는다
 - **기업 모멘텀 분석** — 시그널 누적 종목을 자동 발견, Claude Sonnet으로 5대 질문 프레임워크 기반 모멘텀 레포트 생성 (Google News 보강 + 토스증권 실시간 시세/5거래일 등락률 컨텍스트)
 - **4컷만화 다이제스트** — Gemini 이미지 모델로 일일 다이제스트를 비전공자용 4컷만화로 변환하여 Discord 첨부
 - **소셜 버즈** — ApeWisdom 기반 Reddit 티커 멘션 집계 (일일 수집, 다이제스트 연동)
@@ -62,6 +63,9 @@ bash launchd/install.sh install
 # 일일 실행 (수집 → 자막보강 → 키워드관리 → 스코어링 → 다이제스트 → 기업분석 → Discord)
 python -m pipeline daily
 
+# 주간 Superstar 후보 감사 (기본 30일/120개 근거/최대 8개 후보)
+python -m pipeline superstar-weekly
+
 # 30일 백필 (HN + GitHub만)
 python -m pipeline backfill --days 30
 
@@ -109,6 +113,7 @@ cloudflared tunnel --url http://localhost:3000
 | 작업 | 시간 | plist |
 |------|------|-------|
 | daily | 매일 07:00 | `com.signalcatcher.daily.plist` (run-daily.sh 래퍼, 최대 3회 재시도) |
+| superstar-weekly | 매주 일요일 09:00 KST | `com.signalcatcher.superstar-weekly.plist` |
 | event | 매일 20:00 | `com.signalcatcher.event.plist` |
 | dashboard | 상시 (KeepAlive) | `com.signalcatcher.dashboard.plist` |
 | tunnel | 상시 (KeepAlive) | `com.signalcatcher.tunnel.plist` |
@@ -164,6 +169,7 @@ signalCatcher/
 - [`docs/data-schema.md`](docs/data-schema.md) — 데이터 스키마
 - [`docs/code-architecture.md`](docs/code-architecture.md) — 코드 아키텍처
 - [`docs/adr.md`](docs/adr.md) — 기술 결정 기록 (ADR)
+- [`docs/weekly-superstar.md`](docs/weekly-superstar.md) — 주간 후보 가설 감사 게이트, 스케줄, 한계
 
 ## 라이선스
 

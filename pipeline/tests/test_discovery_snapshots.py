@@ -6,12 +6,12 @@ from datetime import UTC, datetime, timedelta, timezone
 
 from pipeline import db
 from pipeline.db import _migrate_security_master
-from pipeline.main import write_current_discovery_snapshots
 from pipeline.processing.discovery_snapshots import (
     build_candidate_snapshot,
     build_theme_snapshot,
     persist_discovery_snapshots,
     write_discovery_snapshots,
+    write_theme_snapshots,
 )
 from pipeline.processing.sec_security_master import (
     SEC_COMPANY_TICKERS_URL,
@@ -669,20 +669,32 @@ def test_snapshot_persistence_uses_an_explicit_short_write_transaction() -> None
     assert statements[-1] == "COMMIT"
 
 
-def test_daily_flow_snapshot_helper_uses_the_current_run_connection(monkeypatch) -> None:
-    from pipeline import main
-
+def test_daily_theme_writer_never_reads_or_writes_candidates() -> None:
     conn = _conn()
-    captured = {}
+    conn.execute(
+        "INSERT INTO pipeline_runs (run_type, started_at) VALUES ('daily', '2026-08-01')"
+    )
+    conn.execute(
+        """INSERT INTO raw_items
+           (source, source_id, title, published_at)
+           VALUES ('rss', 'theme-only', 'Theme evidence', '2026-08-01')"""
+    )
+    conn.execute(
+        """INSERT INTO keyword_mentions
+           (keyword, source, mention_date, sample_item_ids)
+           VALUES ('cooling', 'rss', '2026-08-01', '[1]')"""
+    )
+    conn.execute(
+        """INSERT INTO trend_alerts
+           (keyword, alert_date, z_score, severity, today_count)
+           VALUES ('cooling', '2026-08-01', 3.0, 'notable', 1)"""
+    )
+    conn.commit()
 
-    def fake_writer(actual_conn, pipeline_run_id, as_of=None):
-        captured.update(conn=actual_conn, pipeline_run_id=pipeline_run_id, as_of=as_of)
-        return {"themes": 1, "candidates": 0}
+    assert write_theme_snapshots(conn, 1, as_of="2026-08-01") == 1
+    assert conn.execute("SELECT COUNT(*) FROM theme_snapshots").fetchone()[0] == 1
+    assert conn.execute("SELECT COUNT(*) FROM candidate_snapshots").fetchone()[0] == 0
 
-    monkeypatch.setattr(main, "get_connection", lambda: conn)
-    monkeypatch.setattr("pipeline.processing.discovery_snapshots.write_discovery_snapshots", fake_writer)
-    assert write_current_discovery_snapshots(7) == {"themes": 1, "candidates": 0}
-    assert captured == {"conn": conn, "pipeline_run_id": 7, "as_of": None}
 
 
 def test_database_writer_preserves_available_thesis_company_and_raw_links() -> None:

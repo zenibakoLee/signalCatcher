@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import sqlite3
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from pipeline import db
 
@@ -19,7 +19,10 @@ def test_pipeline_run_timestamps_are_timezone_aware_utc(monkeypatch) -> None:
             items_collected INTEGER DEFAULT 0,
             items_scored INTEGER DEFAULT 0,
             errors TEXT,
-            duration_secs REAL
+            duration_secs REAL,
+            input_items INTEGER NOT NULL DEFAULT 0,
+            candidates_considered INTEGER NOT NULL DEFAULT 0,
+            candidates_published INTEGER NOT NULL DEFAULT 0
         )"""
     )
     monkeypatch.setattr(db, "_connection", conn)
@@ -33,4 +36,4 @@ def test_pipeline_run_timestamps_are_timezone_aware_utc(monkeypatch) -> None:
     for value in (row["started_at"], row["completed_at"]):
         parsed = datetime.fromisoformat(value)
         assert parsed.tzinfo is not None
-        assert parsed.utcoffset() == timezone.utc.utcoffset(parsed)
+        assert parsed.utcoffset() == UTC.utcoffset(parsed)

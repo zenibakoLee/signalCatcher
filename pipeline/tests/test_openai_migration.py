@@ -61,8 +61,11 @@ def test_daily_llm_namespace_is_uuid_backed_and_separate_from_business_run_id() 
     uuid.UUID(second.removeprefix("daily-7-"))
     source = (ROOT / "pipeline" / "main.py").read_text()
     assert "llm_run_id = _new_llm_run_id(\"daily\", run_id)" in source
-    for call in ("auto_manage_keywords", "detect_trends", "generate_digest", "run_thesis_scout"):
+    for call in ("auto_manage_keywords", "detect_trends", "generate_digest"):
         assert f"{call}(run_id=llm_run_id" in source
+    daily_source = source[source.index("def daily("):source.index("def backfill(")]
+    assert "run_thesis_scout" not in daily_source
+    assert "write_discovery_snapshots" not in daily_source
     assert "since=scoring_since, until=scoring_until, run_id=llm_run_id" in source
 
 

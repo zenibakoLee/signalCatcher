@@ -27,6 +27,7 @@ ALLOWED_MODELS = frozenset((LUNA_MODEL, TERRA_MODEL))
 TERRA_WORKLOADS = frozenset((
     "daily_digest", "company_analysis", "conference_pre_event",
     "conference_post_event", "investment_thesis_scout",
+    "superstar_weekly_synthesis",
 ))
 BILLING_MODE = "chatgpt_subscription"
 DEFAULT_MAX_INPUT_BYTES = 300_000
