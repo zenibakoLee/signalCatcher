@@ -207,6 +207,9 @@ def _migrate_weekly_superstar(conn: sqlite3.Connection) -> None:
         for statement in _WEEKLY_SUPERSTAR_SCHEMA.strip().split(";"):
             if statement.strip():
                 conn.execute(statement)
+        for statement in _WEEKLY_SUPERSTAR_FILTER_V2_SCHEMA.strip().split(";"):
+            if statement.strip():
+                conn.execute(statement)
 
         legacy_exists = conn.execute(
             "SELECT 1 FROM sqlite_master WHERE type='table' "
@@ -858,6 +861,64 @@ CREATE TABLE IF NOT EXISTS weekly_superstar_stage_evidence (
 CREATE UNIQUE INDEX IF NOT EXISTS idx_weekly_stage_raw_once
 ON weekly_superstar_stage_evidence(snapshot_id, raw_item_id)
 WHERE raw_item_id IS NOT NULL;
+"""
+
+
+_WEEKLY_SUPERSTAR_FILTER_V2_SCHEMA = """
+CREATE TABLE IF NOT EXISTS weekly_superstar_filter_audits (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    weekly_snapshot_id INTEGER NOT NULL UNIQUE
+        REFERENCES weekly_superstar_snapshots(id) ON DELETE CASCADE,
+    filter_version TEXT NOT NULL,
+    document_source_url TEXT NOT NULL,
+    document_source_version TEXT NOT NULL,
+    industry_track TEXT NOT NULL CHECK(industry_track IN (
+        'software_platform', 'semiconductor_industrial',
+        'energy_infrastructure', 'other_unclassified'
+    )),
+    classification TEXT CHECK(classification IN (
+        'proven_compounder', 'confirmed_inflection', 'pre_inflection',
+        'mature_fully_priced', 'false_positive'
+    )),
+    classification_status TEXT NOT NULL CHECK(classification_status IN (
+        'unclassified', 'classified'
+    )),
+    authoritative_measurements_present INTEGER NOT NULL DEFAULT 0
+        CHECK(authoritative_measurements_present IN (0, 1)),
+    display_ready INTEGER NOT NULL DEFAULT 0 CHECK(display_ready IN (0, 1)),
+    missing_evidence TEXT NOT NULL,
+    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%S+00:00','now')),
+    CHECK(
+        authoritative_measurements_present = 1
+        OR (classification IS NULL AND classification_status = 'unclassified')
+    )
+);
+CREATE INDEX IF NOT EXISTS idx_weekly_superstar_filter_version
+ON weekly_superstar_filter_audits(filter_version, display_ready, id);
+
+CREATE TABLE IF NOT EXISTS weekly_superstar_filter_criteria (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    audit_id INTEGER NOT NULL REFERENCES weekly_superstar_filter_audits(id) ON DELETE CASCADE,
+    criterion_scope TEXT NOT NULL CHECK(criterion_scope IN ('core', 'industry')),
+    criterion_key TEXT NOT NULL,
+    ordinal INTEGER NOT NULL CHECK(ordinal >= 0),
+    status TEXT NOT NULL CHECK(status IN ('supported', 'partial', 'missing')),
+    claim TEXT NOT NULL,
+    missing_evidence TEXT NOT NULL,
+    UNIQUE(audit_id, criterion_key),
+    UNIQUE(audit_id, ordinal),
+    CHECK(status != 'missing' OR claim = '')
+);
+
+CREATE TABLE IF NOT EXISTS weekly_superstar_filter_citations (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    criterion_id INTEGER NOT NULL
+        REFERENCES weekly_superstar_filter_criteria(id) ON DELETE CASCADE,
+    raw_item_id INTEGER NOT NULL REFERENCES raw_items(id),
+    source TEXT NOT NULL,
+    source_date TEXT NOT NULL,
+    UNIQUE(criterion_id, raw_item_id)
+);
 """
 
 

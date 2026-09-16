@@ -1,0 +1,79 @@
+{
+  "version": "weekly-superstar-filter-v2",
+  "source_url": "https://docs.google.com/document/d/1Cg_7P9nNrzr_fBn6J_YDOUM5SSysM-NSXrLxKcalSo0/edit?usp=sharing",
+  "source_version": "google-doc-2026-09-16-v1",
+  "purpose": "Audit whether a strengthening self-reinforcing moat and platform or technology advantage are beginning to appear in company results.",
+  "core_criteria": [
+    "self_reinforcing_moat",
+    "performance_inflection",
+    "platform_product_transition",
+    "management_execution",
+    "growth_quality",
+    "profitability_quality",
+    "valuation_hurdle",
+    "tam_scalability",
+    "competition_durability"
+  ],
+  "industry_criteria": {
+    "software_platform": [
+      "platform_layer",
+      "switching_cost_source",
+      "developer_partner_ecosystem",
+      "multiproduct_adoption",
+      "api_marketplace_integrations",
+      "customer_spend_expansion",
+      "usage_product_feedback",
+      "network_effect",
+      "ai_on_installed_base",
+      "tam_expansion"
+    ],
+    "semiconductor_industrial": [
+      "next_generation_share_gain",
+      "yield_performance_power_advantage",
+      "customer_qualification_switching_cost",
+      "installed_base_service_consumables",
+      "importance_across_technology_generations",
+      "new_bottleneck_dominance",
+      "production_learning_curve",
+      "capex_entry_barrier",
+      "customer_codevelopment",
+      "post_shortage_margin_durability",
+      "service_consumables_growth",
+      "next_generation_asp_margin_mix"
+    ],
+    "energy_infrastructure": [
+      "long_duration_certification",
+      "installed_record_drives_orders",
+      "backlog_and_capacity_growth",
+      "financing_epc_service_ecosystem",
+      "long_term_system_purchase",
+      "permitting_time_to_power_advantage",
+      "installed_base_service_revenue",
+      "capacity_expansion_unit_cost_decline"
+    ],
+    "other_unclassified": []
+  },
+  "classification_classes": [
+    "proven_compounder",
+    "confirmed_inflection",
+    "pre_inflection",
+    "mature_fully_priced",
+    "false_positive"
+  ],
+  "document_candidate_range": [8, 15],
+  "system_candidate_range": [0, 8],
+  "divergence_note": "The source document requests 8-15 candidates. The system retains its hard maximum of 8 and permits 0 because cost bounds and fail-closed evidence policy take precedence.",
+  "current_release_gate": {
+    "classification": "unclassified",
+    "candidates_published": 0,
+    "required_missing_evidence": [
+      "authoritative_4_8q_financial_measurements",
+      "authoritative_valuation_measurements",
+      "authoritative_management_execution_record"
+    ],
+    "news_claims_are_official_metrics": false,
+    "valuation_is_automatic_rejection": false,
+    "low_gaap_margin_is_automatic_rejection": false,
+    "recommendations_or_price_return_rankings": false
+  }
+}

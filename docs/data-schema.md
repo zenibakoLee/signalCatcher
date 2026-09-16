@@ -115,6 +115,48 @@ keyword UNIQUE
 
 ## pipeline_runs — 실행 감사 로그
 ```sql
--- run_type: daily|event_pre|event_post|backfill
+-- run_type: daily|event_pre|event_post|backfill|superstar_weekly
 -- status: running|completed|completed_with_errors|failed
+-- superstar_weekly: input_items, candidates_considered, candidates_published
+-- current Superstar contract requires candidates_published=0
 ```
+
+## weekly_superstar_snapshots / stage_evidence — CUDA 6단계 감사
+
+기존 v1 테이블을 유지한다. 후보별 6개 플랫폼 단계의 `proven|missing`,
+원본 `raw_item_id`, source, UTC source date를 보존한다. 현재 v1은
+`score`/`rank`가 항상 `NULL`이고 발행하지 않는다.
+
+## weekly_superstar_filter_audits — 문서 기반 v2 필터 헤더
+
+```sql
+-- weekly_snapshot_id UNIQUE FK: 기존 6단계 snapshot에 1:1로 추가
+-- filter_version, document_source_url, document_source_version: 계약 출처
+-- industry_track: software_platform|semiconductor_industrial|
+--                 energy_infrastructure|other_unclassified
+-- classification: 권위 있는 측정치가 없으면 NULL
+-- classification_status: 현재 unclassified
+-- authoritative_measurements_present: 현재 0
+-- display_ready: self_reinforcing_moat 지원이 없으면 0, 행은 보존
+-- missing_evidence: 재무 4~8Q/valuation/경영진 실행 등 release gap JSON
+```
+
+## weekly_superstar_filter_criteria / filter_citations — 정규화된 v2 근거
+
+```sql
+-- filter_criteria: 모든 공통 9개 + 선택 산업 track 전체 criterion을 순서대로 저장
+-- status: supported|partial|missing
+-- claim: missing이면 빈 문자열
+-- missing_evidence: criterion별 명시적 gap JSON
+-- filter_citations: criterion FK + exact raw_item_id/source/source_date
+```
+
+Terra는 위 dense 행이나 회사명을 직접 생성하지 않는다. 검증된 Luna ticker→회사명
+map이 회사를 결정한다. Terra는 후보별로 최대 2개의 `supported|partial` sparse
+finding만 반환하며 각 finding은 64자 printable-ASCII claim과 정확히 1개 citation만
+포함한다. gap 문자열은 모델 출력이 아니다. Post-validation이 잘못된 track, 후보,
+날짜, 중복 또는 불완전한 finding을 deterministic gap이 있는 `missing`으로 내린 뒤
+공통 9개와 해당 산업 criterion 전체를 canonical order로 materialize한다.
+
+뉴스/LLM 주장을 공식 재무·valuation·경영진 측정치로 승격하지 않는다.
+`score`, `rank`, 추천, 주가수익률 순위는 v2 스키마에 없다.

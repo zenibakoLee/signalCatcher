@@ -757,6 +757,16 @@ def _validate_schema_definition(schema: dict[str, Any], path: str) -> None:
             raise LLMConfigurationError(
                 f"{path}.maxLength must provide a finite accepted-output bound"
             )
+        pattern = schema.get("pattern")
+        if pattern is not None:
+            if not isinstance(pattern, str):
+                raise LLMConfigurationError(f"{path}.pattern must be a string")
+            try:
+                re.compile(pattern)
+            except re.error as error:
+                raise LLMConfigurationError(
+                    f"{path}.pattern must be a valid regular expression"
+                ) from error
     if schema_type in {"integer", "number"}:
         for keyword in ("minimum", "maximum"):
             if keyword in schema:
@@ -798,8 +808,18 @@ def _validate_instance(value: Any, schema: dict[str, Any], path: str) -> None:
         for index, item in enumerate(value):
             _validate_instance(item, schema["items"], f"{path}[{index}]")
     elif expected == "string":
+        assert isinstance(value, str)
         if len(value) < schema.get("minLength", 0) or len(value) > schema.get("maxLength", float("inf")):
             raise ValueError(f"{path} length is out of range")
+        pattern = schema.get("pattern")
+        match = re.search(pattern, value) if pattern is not None else None
+        anchored = (
+            isinstance(pattern, str) and pattern.startswith("^") and pattern.endswith("$")
+        )
+        if pattern is not None and (
+            match is None or (anchored and match.span() != (0, len(value)))
+        ):
+            raise ValueError(f"{path} does not match pattern")
     elif expected in {"integer", "number"}:
         if value < schema.get("minimum", -float("inf")) or value > schema.get("maximum", float("inf")):
             raise ValueError(f"{path} is out of range")

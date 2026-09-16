@@ -22,6 +22,37 @@ def answer_schema() -> dict:
     )
 
 
+def test_runtime_schema_validator_enforces_string_patterns() -> None:
+    schema = llm.strict_object_schema(
+        "ascii",
+        {
+            "value": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 4,
+                "pattern": r"^[\x20-\x7E]+$",
+            }
+        },
+    )
+
+    assert llm.CodexOAuthBoundary._parse_json('{"value":"AB-1"}', schema) == {
+        "value": "AB-1"
+    }
+    for encoded in ('{"value":"\\u00e9"}', '{"value":"A\\n"}'):
+        with pytest.raises(llm.LLMParseError, match="pattern"):
+            llm.CodexOAuthBoundary._parse_json(encoded, schema)
+
+
+def test_schema_definition_rejects_invalid_string_pattern() -> None:
+    schema = llm.strict_object_schema(
+        "bad-pattern",
+        {"value": {"type": "string", "maxLength": 4, "pattern": "["}},
+    )
+
+    with pytest.raises(llm.LLMConfigurationError, match="valid regular expression"):
+        llm._validate_schema_definition(schema["schema"], "$")
+
+
 def records(path: Path) -> list[sqlite3.Row]:
     conn = sqlite3.connect(path)
     conn.row_factory = sqlite3.Row

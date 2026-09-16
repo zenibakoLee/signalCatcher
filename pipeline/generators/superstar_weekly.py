@@ -1,17 +1,21 @@
-"""Bounded, source-backed weekly CUDA-moment hypothesis audit.
+"""Bounded, source-backed weekly Superstar hypothesis audit.
 
-The model may classify supplied evidence, but it cannot create evidence. Every
-proven platform-stage hypothesis resolves to an exact raw_items row and source
-date. V1 is fail-closed because this corpus lacks authoritative stage and
-adoption measurements; it never qualifies or publishes a candidate.
+The existing v1 CUDA-stage audit is preserved. The additive v2 filter records
+all document-derived core and industry criteria, but the model cannot create
+evidence. Supported claims resolve to exact candidate-scoped raw_items rows and
+source dates. The current corpus lacks authoritative financial, valuation, and
+management measurements, so classifications, scores, ranks, and publication
+remain fail-closed.
 """
 from __future__ import annotations
 
 import json
+import re
 import sqlite3
 import time
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 from typing import Any
 
 from pipeline import llm
@@ -25,6 +29,71 @@ from pipeline.processing.sec_security_master import (
 )
 
 FEATURE_VERSION = "weekly-superstar-platform-v1"
+FILTER_VERSION = "weekly-superstar-filter-v2"
+FILTER_DOCUMENT_URL = (
+    "https://docs.google.com/document/d/"
+    "1Cg_7P9nNrzr_fBn6J_YDOUM5SSysM-NSXrLxKcalSo0/edit?usp=sharing"
+)
+FILTER_DOCUMENT_SOURCE_VERSION = "google-doc-2026-09-16-v1"
+FILTER_CONFIG_PATH = Path(__file__).resolve().parents[2] / "config" / "superstar_filter_v2.json"
+CORE_FILTER_CRITERIA = (
+    "self_reinforcing_moat",
+    "performance_inflection",
+    "platform_product_transition",
+    "management_execution",
+    "growth_quality",
+    "profitability_quality",
+    "valuation_hurdle",
+    "tam_scalability",
+    "competition_durability",
+)
+INDUSTRY_FILTER_CRITERIA = {
+    "software_platform": (
+        "platform_layer",
+        "switching_cost_source",
+        "developer_partner_ecosystem",
+        "multiproduct_adoption",
+        "api_marketplace_integrations",
+        "customer_spend_expansion",
+        "usage_product_feedback",
+        "network_effect",
+        "ai_on_installed_base",
+        "tam_expansion",
+    ),
+    "semiconductor_industrial": (
+        "next_generation_share_gain",
+        "yield_performance_power_advantage",
+        "customer_qualification_switching_cost",
+        "installed_base_service_consumables",
+        "importance_across_technology_generations",
+        "new_bottleneck_dominance",
+        "production_learning_curve",
+        "capex_entry_barrier",
+        "customer_codevelopment",
+        "post_shortage_margin_durability",
+        "service_consumables_growth",
+        "next_generation_asp_margin_mix",
+    ),
+    "energy_infrastructure": (
+        "long_duration_certification",
+        "installed_record_drives_orders",
+        "backlog_and_capacity_growth",
+        "financing_epc_service_ecosystem",
+        "long_term_system_purchase",
+        "permitting_time_to_power_advantage",
+        "installed_base_service_revenue",
+        "capacity_expansion_unit_cost_decline",
+    ),
+    "other_unclassified": (),
+}
+MAX_FILTER_CRITERIA = len(CORE_FILTER_CRITERIA) + max(
+    len(criteria) for criteria in INDUSTRY_FILTER_CRITERIA.values()
+)
+FILTER_RELEASE_GAPS = (
+    "authoritative_4_8q_financial_measurements",
+    "authoritative_valuation_measurements",
+    "authoritative_management_execution_record",
+)
 PLATFORM_STAGES = (
     "wedge_product",
     "adjacent_products_attach",
@@ -40,6 +109,13 @@ MAX_FINAL_CANDIDATES = 8
 MIN_SCORE = 60
 MIN_INDEPENDENT_SOURCES = 3
 MAX_OUTPUT_TOKENS = 8_000
+SQLITE_MAX_INTEGER = 9_223_372_036_854_775_807
+MAX_FILTER_FINDINGS = 2
+MAX_CLAIM_LENGTH = 64
+MAX_CITATIONS = 1
+MAX_COMPANY_LENGTH = 120
+ASCII_PRINTABLE_PATTERN = r"^[\x20-\x7E]*$"
+TICKER_PATTERN = r"^[A-Z][A-Z0-9]{0,8}(?:[.-][A-Z])?$"
 
 
 def _default_candidate_verifier(
@@ -95,11 +171,20 @@ def _prefilter_schema(item_count: int, candidate_limit: int) -> dict[str, Any]:
             "items": {
                 "type": "object",
                 "properties": {
-                    "ticker": {"type": "string", "minLength": 1, "maxLength": 10},
-                    "company": {"type": "string", "minLength": 1, "maxLength": 200},
+                    "ticker": {
+                        "type": "string", "minLength": 1, "maxLength": 10,
+                        "pattern": TICKER_PATTERN,
+                    },
+                    "company": {
+                        "type": "string", "minLength": 1, "maxLength": MAX_COMPANY_LENGTH,
+                        "pattern": ASCII_PRINTABLE_PATTERN,
+                    },
                     "raw_item_ids": {
                         "type": "array", "minItems": 1, "maxItems": min(20, item_count),
-                        "items": {"type": "integer", "minimum": 1},
+                        "items": {
+                            "type": "integer", "minimum": 1,
+                            "maximum": SQLITE_MAX_INTEGER,
+                        },
                     },
                 },
                 "required": ["ticker", "company", "raw_item_ids"],
@@ -113,7 +198,9 @@ def _synthesis_schema(candidate_limit: int) -> dict[str, Any]:
     citation = {
         "type": "object",
         "properties": {
-            "raw_item_id": {"type": "integer", "minimum": 1},
+            "raw_item_id": {
+                "type": "integer", "minimum": 1, "maximum": SQLITE_MAX_INTEGER,
+            },
             "source_date": {
                 "type": "string", "maxLength": 10,
                 "pattern": r"^\d{4}-\d{2}-\d{2}$",
@@ -133,23 +220,87 @@ def _synthesis_schema(candidate_limit: int) -> dict[str, Any]:
                 "type": "string", "maxLength": 16,
                 "enum": ["proven", "missing"],
             },
-            "claim": {"type": "string", "maxLength": 1000},
-            "citations": {"type": "array", "minItems": 0, "maxItems": 4, "items": citation},
+            "claim": {
+                "type": "string", "maxLength": MAX_CLAIM_LENGTH,
+                "pattern": ASCII_PRINTABLE_PATTERN,
+            },
+            "citations": {
+                "type": "array", "minItems": 0, "maxItems": MAX_CITATIONS,
+                "items": citation,
+            },
         },
         "required": ["stage", "status", "claim", "citations"],
+        "additionalProperties": False,
+    }
+    criterion = {
+        "type": "object",
+        "properties": {
+            "criterion": {
+                "type": "string",
+                "maxLength": 64,
+                "enum": [
+                    *CORE_FILTER_CRITERIA,
+                    *(
+                        key
+                        for values in INDUSTRY_FILTER_CRITERIA.values()
+                        for key in values
+                    ),
+                ],
+            },
+            "status": {
+                "type": "string",
+                "maxLength": 16,
+                "enum": ["supported", "partial"],
+            },
+            "claim": {
+                "type": "string", "minLength": 1, "maxLength": MAX_CLAIM_LENGTH,
+                "pattern": ASCII_PRINTABLE_PATTERN,
+            },
+            "citations": {
+                "type": "array", "minItems": 1, "maxItems": MAX_CITATIONS,
+                "items": citation,
+            },
+        },
+        "required": ["criterion", "status", "claim", "citations"],
+        "additionalProperties": False,
+    }
+    filter_audit = {
+        "type": "object",
+        "properties": {
+            "industry_track": {
+                "type": "string",
+                "maxLength": 32,
+                "enum": list(INDUSTRY_FILTER_CRITERIA),
+            },
+            "classification": {
+                "type": "string",
+                "maxLength": 16,
+                "enum": ["unclassified"],
+            },
+            "filter_findings": {
+                "type": "array",
+                "minItems": 0,
+                "maxItems": MAX_FILTER_FINDINGS,
+                "items": criterion,
+            },
+        },
+        "required": ["industry_track", "classification", "filter_findings"],
         "additionalProperties": False,
     }
     candidate = {
         "type": "object",
         "properties": {
-            "ticker": {"type": "string", "minLength": 1, "maxLength": 10},
-            "company": {"type": "string", "minLength": 1, "maxLength": 200},
+            "ticker": {
+                "type": "string", "minLength": 1, "maxLength": 10,
+                "pattern": TICKER_PATTERN,
+            },
             "stages": {
                 "type": "array", "minItems": len(PLATFORM_STAGES),
                 "maxItems": len(PLATFORM_STAGES), "items": stage,
             },
+            "filter_audit": filter_audit,
         },
-        "required": ["ticker", "company", "stages"],
+        "required": ["ticker", "stages", "filter_audit"],
         "additionalProperties": False,
     }
     return llm.strict_object_schema("superstar_weekly_synthesis", {
@@ -185,15 +336,139 @@ def _validate_prefilter(
     seen_tickers: set[str] = set()
     validated: list[dict[str, Any]] = []
     for company in companies:
-        ticker = str(company["ticker"]).strip().upper()
+        ticker_value = company.get("ticker")
+        company_value = company.get("company")
+        ticker = ticker_value.strip().upper() if isinstance(ticker_value, str) else ""
+        company_name = company_value.strip() if isinstance(company_value, str) else ""
         ids = company["raw_item_ids"]
-        if not ticker or ticker in seen_tickers:
-            raise llm.LLMParseError("weekly prefilter tickers must be non-empty and unique")
+        if (
+            not re.fullmatch(TICKER_PATTERN, ticker)
+            or ticker in seen_tickers
+            or not company_name
+            or len(company_name) > MAX_COMPANY_LENGTH
+            or not re.fullmatch(ASCII_PRINTABLE_PATTERN, company_name)
+        ):
+            raise llm.LLMParseError("weekly prefilter ticker/company is invalid or duplicated")
         if len(ids) != len(set(ids)) or any(raw_id not in evidence_by_id for raw_id in ids):
             raise llm.LLMParseError("weekly prefilter must cite unique supplied raw item IDs")
         seen_tickers.add(ticker)
-        validated.append({**company, "ticker": ticker})
+        validated.append({**company, "ticker": ticker, "company": company_name})
     return validated
+
+
+def _missing_filter_criterion(criterion: str) -> dict[str, Any]:
+    return {
+        "criterion": criterion,
+        "status": "missing",
+        "claim": "",
+        "missing_evidence": [f"evidence_gap:{criterion}"],
+        "citations": [],
+    }
+
+
+def _validate_filter_audit(
+    audit: object,
+    evidence_by_id: dict[int, dict[str, Any]],
+    candidate_raw_ids: set[int] | None,
+) -> dict[str, Any]:
+    if not isinstance(audit, dict):
+        raise llm.LLMParseError("weekly synthesis filter audit is invalid")
+    industry_track = audit.get("industry_track")
+    if industry_track not in INDUSTRY_FILTER_CRITERIA:
+        raise llm.LLMParseError("weekly synthesis industry track is invalid")
+    if audit.get("classification") != "unclassified":
+        raise llm.LLMParseError(
+            "classification requires unavailable authoritative measurements"
+        )
+    expected = [
+        *CORE_FILTER_CRITERIA,
+        *INDUSTRY_FILTER_CRITERIA[industry_track],
+    ]
+    findings = audit.get("filter_findings")
+    if not isinstance(findings, list):
+        raise llm.LLMParseError("weekly synthesis filter findings are invalid")
+
+    valid_by_criterion: dict[str, dict[str, Any]] = {}
+    expected_set = set(expected)
+    criterion_counts: dict[object, int] = {}
+    for entry in findings:
+        if isinstance(entry, dict):
+            key = entry.get("criterion")
+            if isinstance(key, str):
+                criterion_counts[key] = criterion_counts.get(key, 0) + 1
+    for entry in findings:
+        if not isinstance(entry, dict):
+            continue
+        criterion = entry.get("criterion")
+        if (
+            not isinstance(criterion, str)
+            or criterion not in expected_set
+            or criterion_counts.get(criterion) != 1
+        ):
+            continue
+        status = entry.get("status")
+        claim_value = entry.get("claim")
+        claim = claim_value.strip() if isinstance(claim_value, str) else ""
+        citations = entry.get("citations")
+        if status not in {"supported", "partial"}:
+            continue
+        if (
+            not claim
+            or len(claim) > MAX_CLAIM_LENGTH
+            or not re.fullmatch(ASCII_PRINTABLE_PATTERN, claim)
+        ):
+            continue
+        if not isinstance(citations, list) or len(citations) != 1:
+            continue
+        resolved_citations: list[dict[str, Any]] = []
+        seen_ids: set[int] = set()
+        valid = True
+        for citation in citations:
+            if not isinstance(citation, dict):
+                valid = False
+                break
+            raw_id = citation.get("raw_item_id")
+            if not isinstance(raw_id, int) or isinstance(raw_id, bool):
+                valid = False
+                break
+            if candidate_raw_ids is not None and raw_id not in candidate_raw_ids:
+                valid = False
+                break
+            item = evidence_by_id.get(raw_id)
+            if item is None:
+                valid = False
+                break
+            if citation.get("source_date") != item["source_date"]:
+                valid = False
+                break
+            if raw_id in seen_ids:
+                valid = False
+                break
+            seen_ids.add(raw_id)
+            resolved_citations.append({
+                "raw_item_id": raw_id,
+                "source": item["source"],
+                "source_date": item["source_date"],
+            })
+        if not valid:
+            continue
+        valid_by_criterion[criterion] = {
+            **entry,
+            "claim": claim,
+            "missing_evidence": (
+                [f"evidence_gap:{criterion}"] if status == "partial" else []
+            ),
+            "citations": resolved_citations,
+        }
+    resolved_criteria = [
+        valid_by_criterion.get(criterion, _missing_filter_criterion(criterion))
+        for criterion in expected
+    ]
+    return {
+        "industry_track": industry_track,
+        "classification": "unclassified",
+        "criteria": resolved_criteria,
+    }
 
 
 def validate_synthesis(
@@ -201,6 +476,7 @@ def validate_synthesis(
     *,
     allowed_tickers: set[str] | None = None,
     allowed_raw_ids_by_ticker: dict[str, set[int]] | None = None,
+    company_by_ticker: dict[str, str] | None = None,
 ) -> list[dict[str, Any]]:
     """Resolve citations exactly; reject generated, wrong-date, and reused evidence."""
     evidence_by_id = {int(item["raw_item_id"]): item for item in evidence}
@@ -212,10 +488,18 @@ def validate_synthesis(
     for candidate in candidates:
         ticker = str(candidate["ticker"]).strip().upper()
         if (
-            not ticker or ticker in seen_tickers
+            not re.fullmatch(TICKER_PATTERN, ticker) or ticker in seen_tickers
             or (allowed_tickers is not None and ticker not in allowed_tickers)
         ):
             raise llm.LLMParseError("weekly synthesis ticker was not uniquely prefiltered")
+        company = company_by_ticker.get(ticker) if company_by_ticker is not None else None
+        if (
+            not isinstance(company, str)
+            or not company
+            or len(company) > MAX_COMPANY_LENGTH
+            or not re.fullmatch(ASCII_PRINTABLE_PATTERN, company)
+        ):
+            raise llm.LLMParseError("weekly synthesis company was not resolved from Luna")
         candidate_raw_ids = (
             allowed_raw_ids_by_ticker.get(ticker)
             if allowed_raw_ids_by_ticker is not None
@@ -241,7 +525,13 @@ def validate_synthesis(
                     "citations": [],
                 })
                 continue
-            if not citations or not claim.strip():
+            if (
+                not isinstance(citations, list)
+                or len(citations) != 1
+                or not claim.strip()
+                or len(claim.strip()) > MAX_CLAIM_LENGTH
+                or not re.fullmatch(ASCII_PRINTABLE_PATTERN, claim.strip())
+            ):
                 raise llm.LLMParseError("proven stages require a claim and exact citations")
             resolved = []
             for citation in citations:
@@ -264,11 +554,17 @@ def validate_synthesis(
                     "source_date": item["source_date"],
                 })
             resolved_stages.append({**stage, "claim": claim.strip(), "citations": resolved})
+        filter_audit = _validate_filter_audit(
+            candidate["filter_audit"],
+            evidence_by_id,
+            candidate_raw_ids,
+        )
         seen_tickers.add(ticker)
         validated.append({
             "ticker": ticker,
-            "company": str(candidate["company"]).strip(),
+            "company": company,
             "stages": resolved_stages,
+            "filter_audit": filter_audit,
         })
     return validated
 
@@ -317,16 +613,30 @@ def discover_candidates(
     synthesis_input = json.dumps({
         "prefiltered_companies": prefiltered,
         "platform_stages": list(PLATFORM_STAGES),
+        "superstar_filter": {
+            "version": FILTER_VERSION,
+            "document_source_url": FILTER_DOCUMENT_URL,
+            "core_criteria": list(CORE_FILTER_CRITERIA),
+            "industry_criteria": {
+                track: list(criteria)
+                for track, criteria in INDUSTRY_FILTER_CRITERIA.items()
+            },
+        },
         "evidence": json.loads(_evidence_payload(synthesis_evidence)),
     }, ensure_ascii=False, sort_keys=True)
     llm.require_no_business_transaction(conn)
     final_result = boundary.complete(
         instructions=(
-            "Audit the six CUDA-like platform-stage hypotheses. A 'proven' label means only that "
-            "the supplied corpus supports the hypothesis; it is not audited primary/adoption proof. "
-            "Mark a stage proven only with exact supplied "
-            "raw_item_id and source_date citations. Evidence may be used once per company. Mark all "
-            "unproven stages missing; do not paraphrase or invent evidence."
+            "Audit the six CUDA-like platform stages and return at most two sparse v2 Superstar "
+            "filter findings. A stage 'proven' or filter 'supported'/'partial' label means only "
+            "that the supplied corpus supports the bounded claim; it is not audited primary, "
+            "financial, valuation, management, or adoption proof. Mark support only with exact "
+            "candidate-scoped supplied raw_item_id and source_date citations. Return exactly one "
+            "citation per finding and no company names. Omit unsupported criteria; the application "
+            "materializes deterministic gaps. Use concise printable ASCII evidence claims, at most "
+            "64 characters. Do not generate numeric metrics, scores, "
+            "ranks, recommendations, or a final class; classification must be unclassified. "
+            "Evidence may be used once across platform stages per company."
         ),
         input_text=synthesis_input,
         max_output_tokens=MAX_OUTPUT_TOKENS,
@@ -342,6 +652,9 @@ def discover_candidates(
         allowed_raw_ids_by_ticker={
             company["ticker"]: set(company["raw_item_ids"])
             for company in prefiltered
+        },
+        company_by_ticker={
+            company["ticker"]: company["company"] for company in prefiltered
         },
     ), len(evidence)
 
@@ -400,6 +713,78 @@ def verify_candidate_list(
         if result is not None:
             verified[ticker] = result
     return verified, errors
+
+
+def _persist_filter_audit(
+    conn: sqlite3.Connection,
+    *,
+    snapshot_id: int,
+    candidate: dict[str, Any],
+) -> None:
+    audit = candidate["filter_audit"]
+    criteria = audit["criteria"]
+    all_gaps = list(FILTER_RELEASE_GAPS)
+    for criterion in criteria:
+        for gap in criterion["missing_evidence"]:
+            if gap not in all_gaps:
+                all_gaps.append(gap)
+    moat = next(
+        criterion for criterion in criteria
+        if criterion["criterion"] == "self_reinforcing_moat"
+    )
+    display_ready = int(moat["status"] in {"supported", "partial"})
+    cursor = conn.execute(
+        """INSERT INTO weekly_superstar_filter_audits
+           (weekly_snapshot_id, filter_version, document_source_url,
+            document_source_version, industry_track, classification,
+            classification_status, authoritative_measurements_present,
+            display_ready, missing_evidence)
+           VALUES (?, ?, ?, ?, ?, NULL, 'unclassified', 0, ?, ?)""",
+        (
+            snapshot_id,
+            FILTER_VERSION,
+            FILTER_DOCUMENT_URL,
+            FILTER_DOCUMENT_SOURCE_VERSION,
+            audit["industry_track"],
+            display_ready,
+            json.dumps(all_gaps),
+        ),
+    )
+    audit_id = cursor.lastrowid
+    if audit_id is None:
+        raise RuntimeError("weekly filter audit insert returned no row ID")
+    core = set(CORE_FILTER_CRITERIA)
+    for ordinal, criterion in enumerate(criteria):
+        criterion_cursor = conn.execute(
+            """INSERT INTO weekly_superstar_filter_criteria
+               (audit_id, criterion_scope, criterion_key, ordinal, status,
+                claim, missing_evidence)
+               VALUES (?, ?, ?, ?, ?, ?, ?)""",
+            (
+                audit_id,
+                "core" if criterion["criterion"] in core else "industry",
+                criterion["criterion"],
+                ordinal,
+                criterion["status"],
+                criterion["claim"],
+                json.dumps(criterion["missing_evidence"]),
+            ),
+        )
+        criterion_id = criterion_cursor.lastrowid
+        if criterion_id is None:
+            raise RuntimeError("weekly filter criterion insert returned no row ID")
+        for citation in criterion["citations"]:
+            conn.execute(
+                """INSERT INTO weekly_superstar_filter_citations
+                   (criterion_id, raw_item_id, source, source_date)
+                   VALUES (?, ?, ?, ?)""",
+                (
+                    criterion_id,
+                    citation["raw_item_id"],
+                    citation["source"],
+                    citation["source_date"],
+                ),
+            )
 
 
 def persist_weekly_audit(
@@ -506,6 +891,11 @@ def persist_weekly_audit(
                             (snapshot_id, stage["stage"], stage["claim"],
                              citation["raw_item_id"], citation["source"], citation["source_date"]),
                         )
+            _persist_filter_audit(
+                conn,
+                snapshot_id=snapshot_id,
+                candidate=candidate,
+            )
         conn.commit()
     except Exception:
         conn.rollback()
